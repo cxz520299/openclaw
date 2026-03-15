@@ -27,13 +27,15 @@
           (location.protocol === "https:" ? "wss://" : "ws://") +
           location.host +
           "/ws";
-        var requiredHash = new URLSearchParams({
+        var current = new URLSearchParams((location.hash || "").replace(/^#/, ""));
+        var required = new URLSearchParams({
           gatewayUrl: gatewayUrl,
           token: "__OPENCLAW_GATEWAY_TOKEN__",
-          session: "main"
-        }).toString();
+          session: current.get("session") || "main"
+        });
+        var requiredHash = required.toString();
 
-        if (!location.hash || location.hash.indexOf("token=") === -1) {
+        if (location.hash.replace(/^#/, "") !== requiredHash) {
           location.replace("/app/#" + requiredHash);
           return;
         }

@@ -1,9 +1,9 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>小智控制台</title>
+    <title>灏忔櫤鎺у埗鍙?/title>
     <meta name="color-scheme" content="dark light" />
     <link rel="icon" type="image/svg+xml" href="/app/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/app/favicon-32.png" />
@@ -27,13 +27,15 @@
           (location.protocol === "https:" ? "wss://" : "ws://") +
           location.host +
           "/ws";
-        var requiredHash = new URLSearchParams({
+        var current = new URLSearchParams((location.hash || "").replace(/^#/, ""));
+        var required = new URLSearchParams({
           gatewayUrl: gatewayUrl,
-          token: "__OPENCLAW_GATEWAY_TOKEN__",
-          session: "main"
-        }).toString();
+          token: "t8aNBF3bd7bxlWtFM+3IqxGa2+utiEKFcGjL/xarLDvr07IWu+UDlVSywwz5DmGo",
+          session: current.get("session") || "main"
+        });
+        var requiredHash = required.toString();
 
-        if (!location.hash || location.hash.indexOf("token=") === -1) {
+        if (location.hash.replace(/^#/, "") !== requiredHash) {
           location.replace("/app/#" + requiredHash);
           return;
         }
@@ -51,8 +53,8 @@
           "allow-always",
           "/approve ",
           "exec approval",
-          "联网授权",
-          "需要一次联网授权",
+          "鑱旂綉鎺堟潈",
+          "闇€瑕佷竴娆¤仈缃戞巿鏉?,
           "with from /usr/local/lib/node_modules/openclaw/skills/",
           "completed"
         ];
@@ -144,3 +146,4 @@
     <openclaw-app></openclaw-app>
   </body>
 </html>
+

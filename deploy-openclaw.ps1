@@ -10,6 +10,46 @@ if (-not (Test-Path $SourceDir)) {
     throw "Source directory not found: $SourceDir"
 }
 
+function Get-DotEnvValue {
+    param(
+        [string]$EnvPath,
+        [string]$Name
+    )
+
+    $line = Get-Content $EnvPath | Where-Object { $_ -match "^${Name}=" } | Select-Object -First 1
+    if (-not $line) {
+        throw "Missing $Name in $EnvPath"
+    }
+    return ($line -replace "^${Name}=", "").Trim()
+}
+
+function Render-TemplateFile {
+    param(
+        [string]$TemplatePath,
+        [string]$OutputPath,
+        [string]$GatewayToken
+    )
+
+    $content = Get-Content $TemplatePath -Raw
+    $content = $content.Replace("__OPENCLAW_GATEWAY_TOKEN__", $GatewayToken)
+    Set-Content -Path $OutputPath -Value $content -Encoding UTF8NoBOM
+}
+
+$EnvPath = Join-Path $SourceDir ".env"
+if (-not (Test-Path $EnvPath)) {
+    throw "Missing env file: $EnvPath"
+}
+
+$GatewayToken = Get-DotEnvValue -EnvPath $EnvPath -Name "OPENCLAW_GATEWAY_TOKEN"
+Render-TemplateFile `
+    -TemplatePath (Join-Path $SourceDir "openclaw-ui-bootstrap.template.html") `
+    -OutputPath (Join-Path $SourceDir "openclaw-ui-bootstrap.html") `
+    -GatewayToken $GatewayToken
+Render-TemplateFile `
+    -TemplatePath (Join-Path $SourceDir "openclaw-control-shell.template.html") `
+    -OutputPath (Join-Path $SourceDir "openclaw-control-shell.html") `
+    -GatewayToken $GatewayToken
+
 $Include = @(
     "Caddyfile",
     "compose.yml",
