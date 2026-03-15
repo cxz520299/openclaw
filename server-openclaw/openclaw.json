@@ -18,13 +18,13 @@
         "okinto/gpt-5.4": {
           "alias": "gpt",
           "params": {
-            "maxTokens": 8192
+            "maxTokens": 12288
           }
         },
         "okinto/gpt-5.2": {
           "alias": "gpt-fallback",
           "params": {
-            "maxTokens": 8192
+            "maxTokens": 12288
           }
         }
       },
@@ -34,7 +34,7 @@
       },
       "thinkingDefault": "high",
       "verboseDefault": "off",
-      "timeoutSeconds": 1200
+      "timeoutSeconds": 1800
     }
   },
   "tools": {
@@ -54,12 +54,17 @@
       "xiaohongshu_mcp_status",
       "xiaohongshu_mcp_list_tools",
       "xiaohongshu_mcp_call",
+      "xiaohongshu_login_status",
+      "xiaohongshu_search_keyword",
       "weibo_mcp_status",
       "weibo_mcp_list_tools",
       "weibo_mcp_call",
+      "weibo_trending",
+      "weibo_search_keyword",
       "bilibili_mcp_status",
       "bilibili_mcp_list_tools",
       "bilibili_mcp_call",
+      "bilibili_search_keyword",
       "social_mcp_status",
       "social_mcp_list_tools",
       "social_mcp_call"
@@ -92,12 +97,17 @@
           "xiaohongshu_mcp_status",
           "xiaohongshu_mcp_list_tools",
           "xiaohongshu_mcp_call",
+          "xiaohongshu_login_status",
+          "xiaohongshu_search_keyword",
           "weibo_mcp_status",
           "weibo_mcp_list_tools",
           "weibo_mcp_call",
+          "weibo_trending",
+          "weibo_search_keyword",
           "bilibili_mcp_status",
           "bilibili_mcp_list_tools",
           "bilibili_mcp_call",
+          "bilibili_search_keyword",
           "social_mcp_status",
           "social_mcp_list_tools",
           "social_mcp_call",
@@ -140,7 +150,7 @@
           "xiaohongshuUrl": "http://xhs-mcp:3100/mcp",
           "xiaohongshuCommand": "npx",
           "xiaohongshuArgs": ["-y", "xhs-mcp", "mcp"],
-          "timeoutMs": 120000
+          "timeoutMs": 180000
         }
       }
     }
@@ -165,7 +175,7 @@
               "cacheWrite": 0
             },
             "contextWindow": 200000,
-            "maxTokens": 8192
+            "maxTokens": 12288
           },
           {
             "id": "gpt-5.2",
@@ -179,7 +189,7 @@
               "cacheWrite": 0
             },
             "contextWindow": 200000,
-            "maxTokens": 8192
+            "maxTokens": 12288
           }
         ]
       }

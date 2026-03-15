@@ -5,6 +5,7 @@ RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        chromium \
         fonts-liberation \
         fonts-noto-cjk \
         libasound2 \
@@ -28,16 +29,20 @@ RUN apt-get update \
         libxkbcommon0 \
         libxrandr2 \
         wget \
+        xauth \
+        xvfb \
         xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
 ENV HOME=/home/node \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
     PUPPETEER_CACHE_DIR=/opt/puppeteer \
-    XHS_HEADLESS=true
+    PUPPETEER_SKIP_DOWNLOAD=true \
+    XHS_HEADLESS=true \
+    DISPLAY=:99
 
 RUN npm config set registry https://registry.npmmirror.com \
-    && npm install -g xhs-mcp@latest \
-    && npx puppeteer browsers install chrome --path /opt/puppeteer
+    && npm install -g xhs-mcp@latest
 
 RUN mkdir -p /home/node/.xhs-mcp /opt/puppeteer \
     && chown -R node:node /home/node /opt/puppeteer
@@ -47,4 +52,4 @@ WORKDIR /home/node
 
 EXPOSE 3100
 
-CMD ["xhs-mcp", "mcp", "--mode", "http", "--port", "3100"]
+CMD ["sh", "-lc", "xvfb-run -a xhs-mcp mcp --mode http --port 3100"]

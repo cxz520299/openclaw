@@ -185,6 +185,45 @@ function tryParseJson(text) {
   }
 }
 
+async function fetchJson(url, { headers = {}, timeoutMs = 20000 } = {}) {
+  const response = await fetch(url, {
+    headers: {
+      accept: "application/json, text/plain, */*",
+      "user-agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+      ...headers
+    },
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} from ${url}: ${text.slice(0, 200)}`);
+  }
+
+  const parsed = tryParseJson(text);
+  if (!parsed) {
+    throw new Error(`Expected JSON from ${url}, got: ${text.slice(0, 200)}`);
+  }
+  return parsed;
+}
+
+async function fetchText(url, { headers = {}, timeoutMs = 20000 } = {}) {
+  const response = await fetch(url, {
+    headers: {
+      "user-agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+      ...headers
+    },
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} from ${url}: ${text.slice(0, 200)}`);
+  }
+  return text;
+}
+
 function unwrapNode(node) {
   if (node == null) return null;
   if (Array.isArray(node)) return node;
@@ -288,6 +327,23 @@ function cleanText(value) {
   return maybeRepairMojibake(value).replace(/\s+/g, " ").trim();
 }
 
+function decodeJsString(value) {
+  if (typeof value !== "string") return "";
+  try {
+    return JSON.parse(`"${value.replace(/"/g, '\\"')}"`);
+  } catch {
+    return value
+      .replace(/\\u002F/g, "/")
+      .replace(/\\"/g, '"')
+      .replace(/<em class=\\"keyword\\">/g, "")
+      .replace(/<\\\/em>/g, "");
+  }
+}
+
+function stripHtml(value) {
+  return cleanText(String(value || "").replace(/<[^>]+>/g, ""));
+}
+
 function isLikelyPlaceholderTitle(value) {
   const text = cleanText(value).toLowerCase();
   if (!text) return true;
@@ -312,6 +368,7 @@ function isLikelyPlaceholderTitle(value) {
 function toRecord(item, context) {
   const author =
     pickFirst(
+      item.uname,
       item.author,
       item.user,
       item.nickname,
@@ -468,56 +525,167 @@ async function runPythonJson(code, payload) {
 }
 
 async function callBilibiliFallback(tool, args) {
-  const code = `
-import json, sys
-from bilibili_api import search, sync
-from bilibili_api.search import OrderUser, SearchObjectType
+  const keyword = String(args?.keyword || "").trim();
+  const page = Math.max(1, Number(args?.page || 1) || 1);
+  const searchTypeMap = {
+    user: "bili_user",
+    video: "video",
+    live: "live",
+    article: "article"
+  };
 
-payload = json.load(sys.stdin)
-tool = payload.get("tool")
-args = payload.get("args", {})
-keyword = args.get("keyword", "")
-
-if tool == "general_search":
-    result = sync(search.search(keyword))
-elif tool == "search_user":
-    result = sync(search.search_by_type(
-        keyword=keyword,
-        search_type=SearchObjectType.USER,
-        order_type=OrderUser.FANS,
-        page=int(args.get("page", 1)),
-    ))
-elif tool == "get_precise_results":
-    mapping = {
-        "user": SearchObjectType.USER,
-        "video": SearchObjectType.VIDEO,
-        "live": SearchObjectType.LIVE,
-        "article": SearchObjectType.ARTICLE,
-    }
-    search_type = str(args.get("search_type", "video")).lower()
-    result = sync(search.search_by_type(
-        keyword=keyword,
-        search_type=mapping.get(search_type, SearchObjectType.VIDEO),
-        page=1,
-        page_size=20,
-    ))
-else:
-    raise SystemExit(f"unsupported bilibili tool: {tool}")
-
-print(json.dumps(result, ensure_ascii=False))
-`;
-  const stdout = await runPythonJson(code, { tool, args });
-  let structuredContent = null;
-  try {
-    structuredContent = JSON.parse(stdout);
-  } catch {
-    structuredContent = null;
+  if (!keyword) {
+    throw new Error("keyword is required for bilibili search tools");
   }
+
+  const scrapeBilibiliHtmlSearch = async () => {
+    const html = await fetchText(
+      `https://search.bilibili.com/all?keyword=${encodeURIComponent(keyword)}&page=${page}`,
+      {
+        headers: {
+          referer: "https://www.bilibili.com/"
+        }
+      }
+    );
+
+    const objectMatches = html.match(/\{type:f,id:[\s\S]*?is_charge_video:[a-z]\}/g) || [];
+    const results = objectMatches.slice(0, 20).map((chunk) => {
+      const getField = (pattern) => {
+        const match = chunk.match(pattern);
+        return match ? match[1] : "";
+      };
+      const toNumber = (pattern) => {
+        const match = chunk.match(pattern);
+        return match ? Number(match[1]) : 0;
+      };
+      return {
+        type: "video",
+        bvid: getField(/bvid:"([^"]+)"/),
+        arcurl: decodeJsString(getField(/arcurl:"([^"]+)"/)),
+        title: stripHtml(decodeJsString(getField(/title:"([^"]+)"/))),
+        description: stripHtml(decodeJsString(getField(/description:"([^"]*)"/))),
+        author: stripHtml(decodeJsString(getField(/author:"([^"]*)"/))),
+        play: toNumber(/play:(\d+)/),
+        favorites: toNumber(/favorites:(\d+)/),
+        review: toNumber(/review:(\d+)/),
+        pubdate: toNumber(/pubdate:(\d+)/)
+      };
+    }).filter((item) => item.bvid && item.title);
+
+    return {
+      code: 0,
+      message: "OK",
+      data: {
+        result: results,
+        numResults: results.length,
+        page
+      },
+      source: "html-scrape"
+    };
+  };
+
+  let structuredContent;
+  try {
+    if (tool === "general_search") {
+      const url = new URL("https://api.bilibili.com/x/web-interface/search/type");
+      url.search = new URLSearchParams({
+        search_type: "video",
+        keyword,
+        page: String(page)
+      }).toString();
+      structuredContent = await fetchJson(url.toString(), {
+        headers: {
+          referer: `https://search.bilibili.com/all?keyword=${encodeURIComponent(keyword)}`,
+          origin: "https://search.bilibili.com"
+        }
+      });
+    } else if (tool === "search_user") {
+      const url = new URL("https://api.bilibili.com/x/web-interface/search/type");
+      url.search = new URLSearchParams({
+        search_type: "bili_user",
+        keyword,
+        page: String(page)
+      }).toString();
+      structuredContent = await fetchJson(url.toString(), {
+        headers: {
+          referer: `https://search.bilibili.com/upuser?keyword=${encodeURIComponent(keyword)}`,
+          origin: "https://search.bilibili.com"
+        }
+      });
+    } else if (tool === "get_precise_results") {
+      const searchType = String(args?.search_type || "video").toLowerCase();
+      if (searchType === "video") {
+        structuredContent = await scrapeBilibiliHtmlSearch();
+      } else {
+        const url = new URL("https://api.bilibili.com/x/web-interface/search/type");
+        url.search = new URLSearchParams({
+          search_type: searchTypeMap[searchType] || "video",
+          keyword,
+          page: "1"
+        }).toString();
+        structuredContent = await fetchJson(url.toString(), {
+          headers: {
+            referer: `https://search.bilibili.com/all?keyword=${encodeURIComponent(keyword)}`,
+            origin: "https://search.bilibili.com"
+          }
+        });
+      }
+    } else {
+      throw new Error(`unsupported bilibili tool: ${tool}`);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if ((tool === "general_search" || tool === "get_precise_results") && /-412|banned/i.test(message)) {
+      structuredContent = await scrapeBilibiliHtmlSearch();
+    } else {
+      throw error;
+    }
+  }
+
+  if (!structuredContent) {
+    throw new Error(`unsupported bilibili tool: ${tool}`);
+  }
+
+  if (structuredContent?.code && structuredContent.code !== 0) {
+    throw new Error(
+      `bilibili API error ${structuredContent.code}: ${structuredContent.message || "unknown error"}`
+    );
+  }
+
   return {
     isError: false,
-    text: typeof stdout === "string" ? stdout.trim() : "",
+    text: JSON.stringify(structuredContent, null, 2),
     structuredContent,
     raw: structuredContent
+  };
+}
+
+async function callWeiboTrendingFallback(args = {}) {
+  const limit = Math.max(1, Number(args?.limit || 15) || 15);
+  const data = await fetchJson("https://weibo.com/ajax/statuses/hot_band", {
+    headers: {
+      referer: "https://weibo.com/",
+      "x-requested-with": "XMLHttpRequest"
+    }
+  });
+
+  const items = Array.isArray(data?.data?.band_list) ? data.data.band_list : [];
+  const structuredContent = items.slice(0, limit).map((item, index) => ({
+    id: item.realpos || index + 1,
+    trending: Number(item.num || 0),
+    description: cleanText(item.word || item.word_scheme || ""),
+    url:
+      item.scheme ||
+      (item.word_scheme
+        ? `https://s.weibo.com/weibo?q=${encodeURIComponent(item.word_scheme)}`
+        : `https://s.weibo.com/weibo?q=${encodeURIComponent(item.word || "")}`)
+  }));
+
+  return {
+    isError: false,
+    text: JSON.stringify(structuredContent, null, 2),
+    structuredContent,
+    raw: data
   };
 }
 
@@ -930,7 +1098,7 @@ async function getPlatformStatus(state, platform, api) {
       ok: true,
       tools: BILIBILI_FALLBACK_TOOLS.map((tool) => tool.name),
       degraded: true,
-      note: "using direct python fallback for bilibili"
+      note: "using direct bilibili web API fallback"
     };
   }
   try {
@@ -984,6 +1152,31 @@ async function callToolForPlatform(state, platform, tool, args, api) {
   if (platform === "bilibili") {
     return callBilibiliFallback(tool, args);
   }
+  if (platform === "weibo" && tool === "get_trendings") {
+    try {
+      const client = await withClient(state, platform, api);
+      const result = normalizeToolResult(await client.callTool({
+        name: tool,
+        arguments: args || {}
+      }));
+      if (
+        result.isError &&
+        /expecting value|json|visitor system|forbidden/i.test(String(result.text || ""))
+      ) {
+        api.logger?.warn?.(
+          `[${PLUGIN_ID}] weibo get_trendings returned MCP error payload, using ajax fallback: ${result.text}`
+        );
+        return callWeiboTrendingFallback(args);
+      }
+      return result;
+    } catch (error) {
+      api.logger?.warn?.(
+        `[${PLUGIN_ID}] weibo get_trendings failed, falling back to ajax endpoint: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return callWeiboTrendingFallback(args);
+    }
+  }
+
   const client = await withClient(state, platform, api);
   const result = await client.callTool({
     name: tool,
@@ -1408,6 +1601,60 @@ export default function register(api) {
   });
 
   api.registerTool({
+    name: "xiaohongshu_login_status",
+    label: "Xiaohongshu Login Status",
+    description: "Check Xiaohongshu login status with no arguments.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {}
+    },
+    execute: async () => {
+      const result = await callToolForPlatform(state, "xiaohongshu", "xhs_auth_status", {}, api);
+      return stringify({
+        platform: "xiaohongshu",
+        tool: "xhs_auth_status",
+        isError: result.isError,
+        text: result.text,
+        structuredContent: result.structuredContent
+      });
+    }
+  });
+
+  api.registerTool({
+    name: "xiaohongshu_search_keyword",
+    label: "Xiaohongshu Search Keyword",
+    description: "Search Xiaohongshu notes by keyword.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        keyword: {
+          type: "string"
+        }
+      },
+      required: ["keyword"]
+    },
+    execute: async ({ keyword }) => {
+      const result = await callToolForPlatform(
+        state,
+        "xiaohongshu",
+        "xhs_search_note",
+        { keyword },
+        api
+      );
+      return stringify({
+        platform: "xiaohongshu",
+        tool: "xhs_search_note",
+        keyword,
+        isError: result.isError,
+        text: result.text,
+        structuredContent: result.structuredContent
+      });
+    }
+  });
+
+  api.registerTool({
     name: "weibo_mcp_call",
     label: "Weibo MCP Call",
     description: "Invoke a Weibo MCP tool directly. Prefer this tool for Weibo tasks.",
@@ -1481,6 +1728,60 @@ export default function register(api) {
       properties: {}
     },
     execute: async () => stringify([await getPlatformStatus(state, "weibo", api)])
+  });
+
+  api.registerTool({
+    name: "weibo_trending",
+    label: "Weibo Trending",
+    description: "Fetch Weibo trending topics with no arguments.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {}
+    },
+    execute: async () => {
+      const result = await callToolForPlatform(state, "weibo", "get_trendings", {}, api);
+      return stringify({
+        platform: "weibo",
+        tool: "get_trendings",
+        isError: result.isError,
+        text: result.text,
+        structuredContent: result.structuredContent
+      });
+    }
+  });
+
+  api.registerTool({
+    name: "weibo_search_keyword",
+    label: "Weibo Search Keyword",
+    description: "Search Weibo content by keyword.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        keyword: {
+          type: "string"
+        }
+      },
+      required: ["keyword"]
+    },
+    execute: async ({ keyword }) => {
+      const result = await callToolForPlatform(
+        state,
+        "weibo",
+        "search_content",
+        { keyword },
+        api
+      );
+      return stringify({
+        platform: "weibo",
+        tool: "search_content",
+        keyword,
+        isError: result.isError,
+        text: result.text,
+        structuredContent: result.structuredContent
+      });
+    }
   });
 
   api.registerTool({
@@ -1566,5 +1867,38 @@ export default function register(api) {
       properties: {}
     },
     execute: async () => stringify([await getPlatformStatus(state, "bilibili", api)])
+  });
+
+  api.registerTool({
+    name: "bilibili_search_keyword",
+    label: "Bilibili Search Keyword",
+    description: "Search Bilibili content by keyword.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        keyword: {
+          type: "string"
+        }
+      },
+      required: ["keyword"]
+    },
+    execute: async ({ keyword }) => {
+      const result = await callToolForPlatform(
+        state,
+        "bilibili",
+        "general_search",
+        { keyword },
+        api
+      );
+      return stringify({
+        platform: "bilibili",
+        tool: "general_search",
+        keyword,
+        isError: result.isError,
+        text: result.text,
+        structuredContent: result.structuredContent
+      });
+    }
   });
 }

@@ -97,6 +97,7 @@ services:
       dockerfile: services/xhs-mcp/Dockerfile
     restart: unless-stopped
     environment:
+      DISPLAY: :99
       HOME: /home/node
       XHS_HOST: 0.0.0.0
       XHS_PORT: 3100
