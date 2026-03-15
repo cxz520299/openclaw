@@ -1,0 +1,450 @@
+# OpenClaw 阿里云部署运维说明
+
+本文档对应当前这套可运行的线上部署，适用于：
+
+- 服务器：阿里云 ECS Ubuntu
+- 域名：`ai.euzhi.com`
+- 反向代理：Caddy
+- 主服务：OpenClaw Gateway
+- 控制台：OpenClaw Control UI
+- 上游模型网关：`https://api.okinto.com/v1`
+- 当前模型：`gpt-5.4`
+
+## 一、当前架构
+
+当前线上不是 OpenClaw 直接请求 `api.okinto.com/v1`，而是走下面这条链路：
+
+```text
+浏览器
+  -> https://ai.euzhi.com
+  -> Caddy(openclaw-web)
+  -> OpenClaw Gateway(openclaw-gateway)
+  -> okinto-openai-proxy.mjs
+  -> https://api.okinto.com/v1
+```
+
+这样做的原因是：当前 OpenClaw 与 okinto 网关的原生兼容性不够稳定，所以在容器内增加了一层轻量兼容代理，把 OpenClaw 发出的请求整理成 okinto 可接受的 OpenAI Responses / Chat Completions 请求。
+
+## 二、服务器上的实际目录
+
+线上目录固定为：
+
+```bash
+/opt/openclaw
+```
+
+常见文件说明：
+
+- `compose.yml`：Docker Compose 编排
+- `.env`：线上环境变量和密钥
+- `openclaw.json`：OpenClaw 主配置
+- `Caddyfile`：域名 `ai.euzhi.com` 的 HTTPS 和反向代理配置
+- `openclaw-ui-bootstrap.template.html`：控制台首页模板
+- `openclaw-ui-bootstrap.html`：由模板渲染出的实际首页
+- `scripts/render-bootstrap.sh`：根据 `.env` 中的 token 渲染首页
+- `scripts/bootstrap-ubuntu.sh`：Ubuntu 一键安装 Docker 并启动服务
+- `okinto-openai-proxy.mjs`：okinto 兼容代理
+- `forward-browser-ui.mjs`：把浏览器 UI 转发到本机 `18801`
+- `data/`：OpenClaw 持久化目录
+
+## 三、当前容器职责
+
+### 1. `openclaw-gateway`
+
+主容器，负责：
+
+- 运行 `openclaw gateway`
+- 对外提供 WebSocket 网关
+- 调用上游模型
+- 转发 Browser UI
+
+默认端口：
+
+- `18789`：Gateway
+- `18790`：Bridge
+- `18791`：Browser UI
+- `18801`：本地转发后的 Browser UI
+
+说明：
+
+- 这些端口当前只绑定到服务器本机 `127.0.0.1`
+- 不直接暴露公网
+- 公网访问统一走 `Caddy + https://ai.euzhi.com`
+
+### 2. `openclaw-ui`
+
+本地隧道调试用的 Nginx 控制台，监听：
+
+```bash
+127.0.0.1:18800
+```
+
+适合通过 SSH 隧道访问：
+
+```bash
+ssh -L 18800:127.0.0.1:18800 root@服务器IP
+```
+
+### 3. `openclaw-web`
+
+公网入口，负责：
+
+- `80/443` 端口监听
+- Let’s Encrypt 证书申请和续期
+- 反向代理 `/ws`
+- 提供 `/app/` 控制台静态文件
+- 提供 `/` 首页跳转到控制台
+
+## 四、关键配置文件说明
+
+### 1. `.env`
+
+当前线上至少依赖以下变量：
+
+```bash
+OPENCLAW_GATEWAY_TOKEN=控制台连接 Gateway 使用的令牌
+OPENAI_API_KEY=okinto 的上游 API Key
+OPENAI_BASE_URL=https://api.okinto.com/v1
+OPENCLAW_BIND_IP=127.0.0.1
+OPENCLAW_GATEWAY_PORT=18789
+OPENCLAW_BRIDGE_PORT=18790
+OPENCLAW_BROWSER_PORT=18791
+OPENCLAW_DATA_DIR=/opt/openclaw/data
+```
+
+说明：
+
+- `OPENCLAW_GATEWAY_TOKEN` 同时会被注入到控制台首页，用于自动登录
+- `OPENAI_API_KEY` 由 `okinto-openai-proxy.mjs` 转发到 okinto
+- 修改 `.env` 后，通常需要重新渲染首页并重启服务
+
+### 2. `openclaw.json`
+
+当前配置重点：
+
+- `gateway.mode = local`
+- `gateway.controlUi.allowInsecureAuth = true`
+- `gateway.controlUi.dangerouslyDisableDeviceAuth = true`
+- `allowedOrigins` 允许：
+  - `https://ai.euzhi.com`
+  - `http://127.0.0.1:18800`
+  - `http://localhost:18800`
+- 模型主路由：
+  - `primary = okinto/gpt-5.4`
+  - `fallback = okinto/gpt-5.2`
+
+说明：
+
+- 上面两个 `dangerous` 开关是为了尽快让控制台能用
+- 这是便捷优先的方案，不是最严格的生产安全方案
+
+### 3. `Caddyfile`
+
+当前职责：
+
+- `https://ai.euzhi.com/` 提供首页
+- `https://ai.euzhi.com/app/` 提供控制台
+- `https://ai.euzhi.com/ws` 反代到 OpenClaw Gateway
+- 自动处理 HTTPS 证书
+
+## 五、当前已启用的助手能力
+
+当前这套 OpenClaw 已按“执行优先”的方式做过配置，重点可验收能力如下。
+
+### 1. 抓取社媒数据
+
+已接入并放行：
+
+- 小红书 MCP
+- 微博 MCP
+- B 站 MCP
+
+推荐优先使用的工具：
+
+- `social_mcp_collect_and_report`
+- `social_report_build`
+- `xiaohongshu_mcp_call`
+- `social_mcp_call`
+
+其中：
+
+- `social_mcp_collect_and_report` 会直接完成“抓取 -> 保存原始 JSON -> 生成 CSV -> 生成图表 -> 输出摘要路径”
+- `social_report_build` 适合对已有 JSON 文件二次生成报告
+
+### 2. 图表与报表
+
+网关镜像内已补齐：
+
+- `pandas`
+- `matplotlib`
+- `openpyxl`
+
+默认报表脚本：
+
+```bash
+/home/node/.openclaw/workspace/reports/scripts/social_report.py
+```
+
+默认会生成：
+
+- `report.csv`
+- `summary.md`
+- `platforms.png`
+- `keywords.png`
+- `authors.png`
+- `publish_time_trend.png`
+
+### 3. 定时任务
+
+OpenClaw 已放行 cron / automation 能力，适合做：
+
+- 定时抓取关键词
+- 定时生成日报或巡检
+- 定时回传聊天通知
+
+建议使用：
+
+- 独立会话
+- 清晰任务名
+- 需要回聊时使用 announce 类投递方式
+
+## 六、验收建议
+
+可以直接在控制台里用下面这三类中文指令验收。
+
+### 1. 抓取并出图
+
+```text
+帮我抓取小红书关键词 AI，保存原始数据，并生成 CSV、摘要和图表。
+```
+
+### 2. 对现有文件出图
+
+```text
+把 reports/raw 里最新的 JSON 生成报表和图表，并告诉我输出路径。
+```
+
+### 3. 建一个定时任务
+
+```text
+每 1 小时抓一次小红书关键词 AI，生成摘要并回到聊天里通知我。
+```
+
+## 七、首次部署或重建步骤
+
+### 1. 上传部署目录
+
+把本地 `deployment/` 上传到服务器：
+
+```bash
+scp -r deployment root@服务器IP:/opt/openclaw
+```
+
+### 2. 准备环境变量
+
+在服务器创建 `.env`：
+
+```bash
+cd /opt/openclaw
+cp .env.example .env
+vim .env
+```
+
+### 3. 渲染首页
+
+把 `.env` 中的 `OPENCLAW_GATEWAY_TOKEN` 写入首页：
+
+```bash
+cd /opt/openclaw
+bash scripts/render-bootstrap.sh
+```
+
+### 4. 启动
+
+```bash
+cd /opt/openclaw
+bash scripts/bootstrap-ubuntu.sh
+docker compose up -d openclaw-web openclaw-ui
+```
+
+### 5. 验证
+
+```bash
+docker compose ps
+curl -I https://ai.euzhi.com
+curl -I https://ai.euzhi.com/app/
+curl -I https://ai.euzhi.com/app/assets/index-CenotFkT.js
+```
+
+预期：
+
+- 首页返回 `200`
+- `/app/` 返回 `text/html`
+- `/app/assets/*.js` 返回 `application/javascript`
+
+## 八、日常运维命令
+
+### 查看容器状态
+
+```bash
+cd /opt/openclaw
+docker compose ps
+```
+
+### 查看网关日志
+
+```bash
+cd /opt/openclaw
+docker compose logs -f openclaw-gateway
+```
+
+### 查看 Caddy 日志
+
+```bash
+cd /opt/openclaw
+docker compose logs -f openclaw-web
+```
+
+### 查看控制台 Nginx 日志
+
+```bash
+cd /opt/openclaw
+docker compose logs -f openclaw-ui
+```
+
+### 重启服务
+
+```bash
+cd /opt/openclaw
+docker compose restart openclaw-gateway openclaw-web openclaw-ui
+```
+
+### 重新构建和升级
+
+```bash
+cd /opt/openclaw
+docker compose build --pull
+docker compose up -d
+```
+
+### 执行 OpenClaw CLI 检查
+
+```bash
+cd /opt/openclaw
+docker compose run --rm openclaw-cli models status
+docker compose run --rm openclaw-cli doctor
+```
+
+## 九、密钥轮换流程
+
+### 1. 轮换 Gateway Token
+
+生成新 token，修改 `.env` 中的：
+
+```bash
+OPENCLAW_GATEWAY_TOKEN=新的随机字符串
+```
+
+然后执行：
+
+```bash
+cd /opt/openclaw
+bash scripts/render-bootstrap.sh
+docker compose up -d openclaw-gateway openclaw-web openclaw-ui
+```
+
+说明：
+
+- `render-bootstrap.sh` 会把新 token 写进首页
+- 这样访问 `https://ai.euzhi.com/` 时会自动带上新 token
+- 旧 token 会立刻失效
+
+### 2. 轮换上游 `OPENAI_API_KEY`
+
+先到 okinto 控制台生成新 key，然后在服务器执行：
+
+```bash
+cd /opt/openclaw
+vim .env
+docker compose up -d openclaw-gateway
+```
+
+说明：
+
+- 这个步骤通常不会影响域名和控制台静态页面
+- 只会更新模型调用凭据
+- 建议确认新 key 可用后，再删除旧 key
+
+## 十、常见故障排查
+
+### 1. 控制台白屏
+
+优先检查：
+
+```bash
+curl -I https://ai.euzhi.com/app/assets/index-CenotFkT.js
+```
+
+如果返回的是 `text/html`，说明静态资源被错误回退到了 `index.html`，应检查 `Caddyfile` 里的 `/app/assets/*` 路由。
+
+### 2. 控制台显示 `disconnected (1006)`
+
+优先检查：
+
+```bash
+docker compose logs --tail=100 openclaw-gateway
+docker compose logs --tail=100 openclaw-web
+```
+
+并确认：
+
+- `https://ai.euzhi.com/ws` 已由 Caddy 反代到 `openclaw-gateway:18789`
+- `allowedOrigins` 已包含 `https://ai.euzhi.com`
+
+### 3. 模型能打开控制台，但无法回答
+
+检查：
+
+```bash
+docker compose logs --tail=100 openclaw-gateway
+docker compose exec -T openclaw-gateway sh -lc 'node -e "fetch(\"http://127.0.0.1:18789/healthz\").then(r=>r.text()).then(console.log)"'
+```
+
+再确认：
+
+- `.env` 里的 `OPENAI_API_KEY` 是否有效
+- `okinto-openai-proxy.mjs` 是否正常运行
+- `openclaw.json` 的 provider 是否指向 `http://okinto-openai-proxy:19080/v1`
+
+### 4. HTTPS 证书失败
+
+检查：
+
+```bash
+docker compose logs --tail=100 openclaw-web
+```
+
+确认：
+
+- `ai.euzhi.com` 的 DNS A 记录确实指向 ECS 公网 IP
+- 阿里云安全组放行 `80` 和 `443`
+- 服务器系统防火墙没有拦截
+
+## 十一、安全提醒
+
+当前这套部署为了“快速可用”，做了以下便捷设置：
+
+- 控制台首页自动带 token
+- `allowInsecureAuth = true`
+- `dangerouslyDisableDeviceAuth = true`
+
+这意味着：
+
+- 知道域名且能访问首页的人，理论上可以直接进入控制台
+- 因此建议至少配合以下措施之一：
+  - Caddy Basic Auth
+  - Cloudflare Access
+  - 阿里云 WAF / 零信任访问
+  - 只开放给固定 IP
+
+如果后面要收紧安全，可以在下一轮运维中继续处理。

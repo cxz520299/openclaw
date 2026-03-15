@@ -1,0 +1,52 @@
+ai.euzhi.com {
+  encode zstd gzip
+
+  handle /reports/* {
+    root * /srv/reports
+    uri strip_prefix /reports
+    file_server browse
+  }
+
+  @root path /
+  handle @root {
+    root * /srv
+    file_server
+  }
+
+  handle /app/avatar/* {
+    reverse_proxy openclaw-gateway:18789
+  }
+
+  handle /app/__openclaw__/* {
+    reverse_proxy openclaw-gateway:18789
+  }
+
+  handle /app/assets/* {
+    root * /srv
+    file_server
+  }
+
+  @app_shell path /app /app/
+  handle @app_shell {
+    root * /srv
+    rewrite * /openclaw-control-shell.html
+    file_server
+  }
+
+  handle /app/* {
+    root * /srv
+    try_files {path} /openclaw-control-shell.html
+    file_server
+  }
+
+  handle /qq/* {
+    reverse_proxy qq-bot-bridge:3400
+  }
+
+  handle /ws {
+    reverse_proxy openclaw-gateway:18789 {
+      header_up Host ai.euzhi.com
+      header_up Origin https://ai.euzhi.com
+    }
+  }
+}

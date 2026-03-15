@@ -1,0 +1,5 @@
+.codex-temp-askpass.cmd
+server-openclaw/.env
+server-openclaw/.env.bak-*
+server-openclaw/data/
+server-openclaw/.DS_Store

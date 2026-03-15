@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenClaw</title>
+  </head>
+  <body>
+    <script>
+      (function () {
+        var gatewayUrl =
+          (location.protocol === "https:" ? "wss://" : "ws://") +
+          location.host +
+          "/ws";
+        location.replace(
+          "/app/#" +
+            new URLSearchParams({
+              gatewayUrl: gatewayUrl,
+              token: "t8aNBF3bd7bxlWtFM+3IqxGa2+utiEKFcGjL/xarLDvr07IWu+UDlVSywwz5DmGo",
+              session: "main"
+            }).toString()
+        );
+      })();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,2 @@
+function u(n,e){if(!n)return null;const r=(n.channels??{})[e];if(r&&typeof r=="object")return r;const l=n[e];return l&&typeof l=="object"?l:null}function f(n){if(n==null)return"n/a";if(typeof n=="string"||typeof n=="number"||typeof n=="boolean")return String(n);try{return JSON.stringify(n)}catch{return"n/a"}}function o(n){const e=u(n.configForm,n.channelId);return e?n.fields.flatMap(t=>t in e?[{label:t,value:f(e[t])}]:[]):[]}export{u as a,f,o as r};
+//# sourceMappingURL=channel-config-extras-BkKp7v9q.js.map

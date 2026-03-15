@@ -1,0 +1,176 @@
+{
+  "gateway": {
+    "mode": "local",
+    "controlUi": {
+      "allowInsecureAuth": true,
+      "dangerouslyDisableDeviceAuth": true,
+      "allowedOrigins": [
+        "https://ai.euzhi.com",
+        "http://127.0.0.1:18800",
+        "http://localhost:18800"
+      ]
+    }
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "/home/node/.openclaw/workspace",
+      "models": {
+        "okinto/gpt-5.4": {
+          "alias": "gpt",
+          "params": {
+            "maxTokens": 8192
+          }
+        },
+        "okinto/gpt-5.2": {
+          "alias": "gpt-fallback",
+          "params": {
+            "maxTokens": 8192
+          }
+        }
+      },
+      "model": {
+        "primary": "okinto/gpt-5.4",
+        "fallbacks": ["okinto/gpt-5.2"]
+      },
+      "thinkingDefault": "minimal",
+      "verboseDefault": "off",
+      "timeoutSeconds": 600
+    }
+  },
+  "tools": {
+    "profile": "full",
+    "allow": [
+      "group:fs",
+      "group:runtime",
+      "group:sessions",
+      "group:web",
+      "group:ui",
+      "group:nodes",
+      "group:automation",
+      "image",
+      "social_daily_digest",
+      "social_mcp_collect_and_report",
+      "social_report_build",
+      "xiaohongshu_mcp_status",
+      "xiaohongshu_mcp_list_tools",
+      "xiaohongshu_mcp_call",
+      "social_mcp_status",
+      "social_mcp_list_tools",
+      "social_mcp_call"
+    ],
+    "deny": [],
+    "elevated": {
+      "enabled": true,
+      "allowFrom": {
+        "webchat": ["*"]
+      }
+    },
+    "sandbox": {
+      "tools": {
+        "allow": [
+          "exec",
+          "process",
+          "read",
+          "write",
+          "edit",
+          "apply_patch",
+          "image",
+          "browser",
+          "canvas",
+          "nodes",
+          "cron",
+          "gateway",
+          "social_daily_digest",
+          "social_mcp_collect_and_report",
+          "social_report_build",
+          "xiaohongshu_mcp_status",
+          "xiaohongshu_mcp_list_tools",
+          "xiaohongshu_mcp_call",
+          "social_mcp_status",
+          "social_mcp_list_tools",
+          "social_mcp_call",
+          "sessions_list",
+          "sessions_history",
+          "sessions_send",
+          "sessions_spawn",
+          "sessions_yield",
+          "subagents",
+          "session_status"
+        ],
+        "deny": []
+      }
+    },
+    "exec": {
+      "applyPatch": {
+        "enabled": true,
+        "allowModels": ["gpt-5.4", "gpt-5.2"]
+      }
+    }
+  },
+  "plugins": {
+    "allow": ["acpx", "social-mcp"],
+    "load": {
+      "paths": ["/opt/openclaw/plugins/social-mcp"]
+    },
+    "entries": {
+      "acpx": {
+        "enabled": true,
+        "config": {
+          "permissionMode": "approve-all"
+        }
+      },
+      "social-mcp": {
+        "enabled": true,
+        "config": {
+          "weiboUrl": "http://weibo-mcp:4200/mcp",
+          "bilibiliCommand": "python3",
+          "bilibiliArgs": ["/opt/openclaw/social-sources/bilibili.py"],
+          "xiaohongshuUrl": "http://xhs-mcp:3100/mcp",
+          "xiaohongshuCommand": "npx",
+          "xiaohongshuArgs": ["-y", "xhs-mcp", "mcp"],
+          "timeoutMs": 120000
+        }
+      }
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "okinto": {
+        "baseUrl": "http://127.0.0.1:19080/v1",
+        "apiKey": "${OPENAI_API_KEY}",
+        "api": "openai-responses",
+        "models": [
+          {
+            "id": "gpt-5.4",
+            "name": "GPT-5.4",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "gpt-5.2",
+            "name": "GPT-5.2",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          }
+        ]
+      }
+    }
+  }
+}

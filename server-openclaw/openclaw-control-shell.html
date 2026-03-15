@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>小智控制台</title>
+    <meta name="color-scheme" content="dark light" />
+    <link rel="icon" type="image/svg+xml" href="/app/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/app/favicon-32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/app/apple-touch-icon.png" />
+    <link rel="stylesheet" crossorigin href="/app/assets/index-C4-UYVQd.css" />
+    <style>
+      [data-xz-hide-debug="1"] {
+        display: none !important;
+      }
+
+      body[data-xz-clean-ui="1"] article[data-xz-role="tool-card"],
+      body[data-xz-clean-ui="1"] section[data-xz-role="tool-card"],
+      body[data-xz-clean-ui="1"] li[data-xz-role="tool-card"],
+      body[data-xz-clean-ui="1"] div[data-xz-role="tool-card"] {
+        display: none !important;
+      }
+    </style>
+    <script>
+      (function () {
+        var gatewayUrl =
+          (location.protocol === "https:" ? "wss://" : "ws://") +
+          location.host +
+          "/ws";
+        var requiredHash = new URLSearchParams({
+          gatewayUrl: gatewayUrl,
+          token: "__OPENCLAW_GATEWAY_TOKEN__",
+          session: "main"
+        }).toString();
+
+        if (!location.hash || location.hash.indexOf("token=") === -1) {
+          location.replace("/app/#" + requiredHash);
+          return;
+        }
+
+        var MARKERS = [
+          "1 tool read",
+          "1 tool exec",
+          "tool read",
+          "tool exec",
+          "tool web_fetch",
+          "web_fetch",
+          "tool call",
+          "tool output",
+          "allow-once",
+          "allow-always",
+          "/approve ",
+          "exec approval",
+          "联网授权",
+          "需要一次联网授权",
+          "with from /usr/local/lib/node_modules/openclaw/skills/",
+          "completed"
+        ];
+
+        var TOOL_PATTERNS = [
+          /\b\d+\s+tool\s+(read|exec|web_fetch|call|output)\b/i,
+          /\btool\s+(read|exec|web_fetch|call|output)\b/i,
+          /\bwith\s+from\s+\/usr\/local\/lib\/node_modules\/openclaw\/skills\//i,
+          /\b\/approve\b/i
+        ];
+
+        function shouldHide(text) {
+          var value = String(text || "").trim().toLowerCase();
+          if (!value) return false;
+          if (MARKERS.some(function (marker) {
+            return value.indexOf(marker) !== -1;
+          })) return true;
+          return TOOL_PATTERNS.some(function (pattern) {
+            return pattern.test(value);
+          });
+        }
+
+        function findCard(node) {
+          if (!(node instanceof HTMLElement)) return null;
+          var current = node;
+          for (var i = 0; i < 6 && current; i += 1) {
+            var tag = (current.tagName || "").toLowerCase();
+            var text = String(current.innerText || current.textContent || "").trim().toLowerCase();
+            if (
+              tag === "article" ||
+              tag === "section" ||
+              tag === "li" ||
+              (tag === "div" && text.indexOf("tool") !== -1)
+            ) {
+              return current;
+            }
+            current = current.parentElement;
+          }
+          return node;
+        }
+
+        function markNode(node) {
+          if (!(node instanceof HTMLElement)) return;
+
+          var text = (node.innerText || node.textContent || "").trim();
+          if (!shouldHide(text)) return;
+
+          var card = findCard(node);
+          if (card instanceof HTMLElement) {
+            card.setAttribute("data-xz-hide-debug", "1");
+            card.setAttribute("data-xz-role", "tool-card");
+          } else {
+            node.setAttribute("data-xz-hide-debug", "1");
+          }
+        }
+
+        function sweep(root) {
+          if (!(root instanceof HTMLElement || root instanceof Document)) return;
+          var nodes = root.querySelectorAll ? root.querySelectorAll("article, section, li, div, span, button") : [];
+          for (var i = 0; i < nodes.length; i += 1) {
+            markNode(nodes[i]);
+          }
+          if (root instanceof HTMLElement) {
+            markNode(root);
+          }
+        }
+
+        document.addEventListener("DOMContentLoaded", function () {
+          document.body.setAttribute("data-xz-clean-ui", "1");
+          sweep(document);
+          var observer = new MutationObserver(function (mutations) {
+            for (var i = 0; i < mutations.length; i += 1) {
+              var mutation = mutations[i];
+              for (var j = 0; j < mutation.addedNodes.length; j += 1) {
+                var added = mutation.addedNodes[j];
+                if (added instanceof HTMLElement) {
+                  sweep(added);
+                }
+              }
+            }
+          });
+          observer.observe(document.body, { childList: true, subtree: true });
+        });
+      })();
+    </script>
+    <script type="module" crossorigin src="/app/assets/index-CenotFkT.js"></script>
+  </head>
+  <body>
+    <openclaw-app></openclaw-app>
+  </body>
+</html>
