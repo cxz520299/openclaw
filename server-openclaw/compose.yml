@@ -17,6 +17,7 @@ services:
       OPENAI_BASE_URL: ${OPENAI_BASE_URL}
     volumes:
       - ${OPENCLAW_DATA_DIR}:/home/node/.openclaw
+      - ${OPENCLAW_DATA_DIR}/xhs:/home/node/.xhs-mcp
       - ./openclaw.json:/home/node/.openclaw/openclaw.json:ro
       - ./okinto-openai-proxy.mjs:/opt/openclaw/okinto-openai-proxy.mjs:ro
       - ./forward-browser-ui.mjs:/opt/openclaw/forward-browser-ui.mjs:ro

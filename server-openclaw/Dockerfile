@@ -3,10 +3,21 @@ FROM node:22-bookworm-slim
 RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tini ca-certificates curl git python3 python3-pip \
+    && apt-get install -y --no-install-recommends \
+        tini \
+        ca-certificates \
+        curl \
+        git \
+        imagemagick \
+        python3 \
+        python3-pip \
+        chromium \
+        xauth \
+        xvfb \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g openclaw@latest clawhub @openai/codex
+RUN npm config set registry https://registry.npmmirror.com \
+    && npm install -g openclaw@latest clawhub @openai/codex xhs-mcp@latest
 
 RUN mkdir -p /usr/local/lib/node_modules/openclaw/extensions/acpx/node_modules \
     && chown -R node:node /usr/local/lib/node_modules/openclaw/extensions
@@ -31,7 +42,9 @@ COPY social-sources /opt/openclaw/social-sources
 
 ENV HOME=/home/node \
     TERM=xterm-256color \
-    NODE_ENV=production
+    NODE_ENV=production \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
+    PUPPETEER_SKIP_DOWNLOAD=true
 
 WORKDIR /home/node
 USER node

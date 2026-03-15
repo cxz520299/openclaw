@@ -11,6 +11,13 @@ const WORKSPACE_ROOT = process.env.OPENCLAW_WORKSPACE_DIR || "/home/node/.opencl
 const REPORT_SCRIPT = path.join(WORKSPACE_ROOT, "reports/scripts/social_report.py");
 const REPORTS_ROOT = path.join(WORKSPACE_ROOT, "reports");
 const DASHBOARD_SCRIPT = path.join(WORKSPACE_ROOT, "reports/scripts/generate_reports_dashboard.py");
+const XHS_LOGIN_ROOT = path.join(REPORTS_ROOT, "xiaohongshu-login");
+const XHS_LOGIN_SCREENSHOT = path.join(XHS_LOGIN_ROOT, "latest.png");
+const XHS_LOGIN_META = path.join(XHS_LOGIN_ROOT, "session.json");
+const XHS_LOGIN_LOG = path.join(XHS_LOGIN_ROOT, "login.log");
+const XHS_LOGIN_PID = path.join(XHS_LOGIN_ROOT, "login.pid");
+const XHS_LOGIN_XVFB_PID = path.join(XHS_LOGIN_ROOT, "xvfb.pid");
+const XHS_LOGIN_DISPLAY = ":98";
 const BILIBILI_FALLBACK_TOOLS = [
   {
     name: "general_search",
@@ -441,6 +448,23 @@ async function ensureDir(dir) {
   await fs.mkdir(dir, { recursive: true });
 }
 
+async function fileExists(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readJsonFile(filePath, fallback = null) {
+  try {
+    return JSON.parse(await fs.readFile(filePath, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
 async function writeJson(filePath, value) {
   await ensureDir(path.dirname(filePath));
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
@@ -736,6 +760,200 @@ async function buildArtifacts({ platform, keyword, tool, result }) {
 async function writeText(filePath, content) {
   await ensureDir(path.dirname(filePath));
   await fs.writeFile(filePath, content, "utf8");
+}
+
+function toReportUrl(filePath) {
+  return `https://ai.euzhi.com/reports/${path.relative(REPORTS_ROOT, filePath).split(path.sep).join("/")}`;
+}
+
+async function runCommand(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      ...options
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      reject(new Error(`${command} exited with code ${code}: ${stderr || stdout}`));
+    });
+  });
+}
+
+async function writePidFile(pidFile, pid) {
+  await fs.writeFile(pidFile, `${pid}\n`, "utf8");
+}
+
+async function removeFile(filePath) {
+  try {
+    await fs.rm(filePath, { force: true });
+  } catch {}
+}
+
+async function spawnDetached(command, args, options = {}) {
+  const child = spawn(command, args, {
+    detached: true,
+    stdio: "ignore",
+    ...options
+  });
+  child.unref();
+  if (!child.pid) {
+    throw new Error(`failed to start detached process: ${command}`);
+  }
+  return child.pid;
+}
+
+async function sleep(ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function isPidAlive(pidFile) {
+  if (!(await fileExists(pidFile))) return false;
+  const rawPid = cleanText(await fs.readFile(pidFile, "utf8"));
+  if (!rawPid) return false;
+  try {
+    process.kill(Number(rawPid), 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function captureXiaohongshuLoginScreenshot() {
+  await ensureDir(XHS_LOGIN_ROOT);
+  await runCommand(
+    "sh",
+    [
+      "-lc",
+      `DISPLAY=${XHS_LOGIN_DISPLAY} import -display ${XHS_LOGIN_DISPLAY} -window root png:${XHS_LOGIN_SCREENSHOT}`
+    ],
+    {
+      env: {
+        ...process.env,
+        DISPLAY: XHS_LOGIN_DISPLAY
+      }
+    }
+  );
+  return {
+    screenshot_path: XHS_LOGIN_SCREENSHOT,
+    screenshot_url: toReportUrl(XHS_LOGIN_SCREENSHOT)
+  };
+}
+
+async function stopXiaohongshuLoginSession() {
+  for (const pidFile of [XHS_LOGIN_PID, XHS_LOGIN_XVFB_PID]) {
+    if (!(await fileExists(pidFile))) continue;
+    const pid = cleanText(await fs.readFile(pidFile, "utf8"));
+    if (!pid) continue;
+    try {
+      process.kill(Number(pid), "SIGTERM");
+    } catch {}
+    await removeFile(pidFile);
+  }
+  await writeJson(XHS_LOGIN_META, {
+    active: false,
+    stopped_at: new Date().toISOString()
+  });
+}
+
+async function startXiaohongshuLoginSession() {
+  await ensureDir(XHS_LOGIN_ROOT);
+
+  if (await isPidAlive(XHS_LOGIN_PID)) {
+    const snapshot = await captureXiaohongshuLoginScreenshot();
+    const meta = await readJsonFile(XHS_LOGIN_META, {});
+    return {
+      active: true,
+      reused: true,
+      ...meta,
+      ...snapshot
+    };
+  }
+
+  await stopXiaohongshuLoginSession();
+  await removeFile(XHS_LOGIN_LOG);
+  await removeFile(XHS_LOGIN_SCREENSHOT);
+  await removeFile("/tmp/.X98-lock");
+
+  const xvfbPid = await spawnDetached("Xvfb", [
+    XHS_LOGIN_DISPLAY,
+    "-screen",
+    "0",
+    "1280x1024x24",
+    "-nolisten",
+    "tcp"
+  ]);
+  await writePidFile(XHS_LOGIN_XVFB_PID, xvfbPid);
+
+  await sleep(1500);
+
+  const logHandle = await fs.open(XHS_LOGIN_LOG, "a");
+  const loginProcess = spawn("xhs-mcp", ["login", "--timeout", "600"], {
+    detached: true,
+    stdio: ["ignore", logHandle.fd, logHandle.fd],
+    env: {
+      ...process.env,
+      HOME: "/home/node",
+      DISPLAY: XHS_LOGIN_DISPLAY,
+      PUPPETEER_EXECUTABLE_PATH: "/usr/bin/chromium",
+      PUPPETEER_SKIP_DOWNLOAD: "true"
+    }
+  });
+  loginProcess.unref();
+  await logHandle.close();
+  if (!loginProcess.pid) {
+    throw new Error("failed to start xhs-mcp login process");
+  }
+  const loginPid = loginProcess.pid;
+  await writePidFile(XHS_LOGIN_PID, loginPid);
+
+  await sleep(8000);
+
+  const active = await isPidAlive(XHS_LOGIN_PID);
+  const snapshot = active ? await captureXiaohongshuLoginScreenshot() : {};
+  const meta = {
+    active,
+    started_at: new Date().toISOString(),
+    display: XHS_LOGIN_DISPLAY,
+    log_path: XHS_LOGIN_LOG
+  };
+  await writeJson(XHS_LOGIN_META, meta);
+  return {
+    ...meta,
+    ...snapshot
+  };
+}
+
+async function getXiaohongshuLoginSession(api, { capture = true } = {}) {
+  const status = await callToolForPlatform(api.__socialState, "xiaohongshu", "xhs_auth_status", {}, api);
+  const meta = await readJsonFile(XHS_LOGIN_META, {});
+  const active = await isPidAlive(XHS_LOGIN_PID);
+  const screenshot = capture && active ? await captureXiaohongshuLoginScreenshot() : {
+    screenshot_path: await fileExists(XHS_LOGIN_SCREENSHOT) ? XHS_LOGIN_SCREENSHOT : null,
+    screenshot_url: await fileExists(XHS_LOGIN_SCREENSHOT) ? toReportUrl(XHS_LOGIN_SCREENSHOT) : null
+  };
+
+  if (status?.text && /"loggedIn":\s*true|"status":\s*"logged_in"/i.test(String(status.text))) {
+    await stopXiaohongshuLoginSession();
+  }
+
+  return {
+    active,
+    ...meta,
+    ...screenshot,
+    status: status.structuredContent || tryParseJson(status.text) || status.text
+  };
 }
 
 function buildDailySummaryMarkdown({ keyword, date, successes, failures, reportDir }) {
@@ -1189,6 +1407,7 @@ export default function register(api) {
   const state = {
     clients: new Map()
   };
+  api.__socialState = state;
 
   api.registerTool({
     name: "social_mcp_status",
@@ -1650,6 +1869,81 @@ export default function register(api) {
         isError: result.isError,
         text: result.text,
         structuredContent: result.structuredContent
+      });
+    }
+  });
+
+  api.registerTool({
+    name: "xiaohongshu_login_start",
+    label: "Xiaohongshu Login Start",
+    description: "Start a XiaoHongShu login session, save a QR/login screenshot, and return a public screenshot URL.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {}
+    },
+    execute: async () => {
+      const loginStart = await startXiaohongshuLoginSession();
+      return stringify({
+        platform: "xiaohongshu",
+        action: "login_start",
+        ok: loginStart.active,
+        screenshot_path: loginStart.screenshot_path || null,
+        screenshot_url: loginStart.screenshot_url || null,
+        log_path: loginStart.log_path || XHS_LOGIN_LOG,
+        instructions: [
+          "1. Open the screenshot URL and scan the QR code with XiaoHongShu.",
+          "2. If the page is not a QR page yet, refresh the screenshot once after a few seconds.",
+          "3. After scanning, call xiaohongshu_login_check to verify whether login completed."
+        ]
+      });
+    }
+  });
+
+  api.registerTool({
+    name: "xiaohongshu_login_qr",
+    label: "Xiaohongshu Login QR",
+    description: "Refresh and return the current XiaoHongShu login QR or browser screenshot.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {}
+    },
+    execute: async () => {
+      const session = await getXiaohongshuLoginSession(api, { capture: true });
+      return stringify({
+        platform: "xiaohongshu",
+        action: "login_qr",
+        active: session.active,
+        screenshot_path: session.screenshot_path,
+        screenshot_url: session.screenshot_url,
+        status: session.status
+      });
+    }
+  });
+
+  api.registerTool({
+    name: "xiaohongshu_login_check",
+    label: "Xiaohongshu Login Check",
+    description: "Check whether the XiaoHongShu login session completed and return the latest screenshot if still pending.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {}
+    },
+    execute: async () => {
+      const session = await getXiaohongshuLoginSession(api, { capture: true });
+      return stringify({
+        platform: "xiaohongshu",
+        action: "login_check",
+        active: session.active,
+        screenshot_path: session.screenshot_path,
+        screenshot_url: session.screenshot_url,
+        status: session.status,
+        next_step:
+          session?.status?.loggedIn || session?.status?.status === "logged_in"
+            ? "login_completed"
+            : "scan_qr_then_retry"
       });
     }
   });
