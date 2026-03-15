@@ -28,6 +28,7 @@ $Include = @(
     "start-openclaw.sh",
     ".env",
     "control-ui-dist",
+    "data/workspace/AGENTS.md",
     "plugins",
     "scripts",
     "services",

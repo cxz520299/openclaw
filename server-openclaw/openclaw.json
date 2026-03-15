@@ -32,9 +32,9 @@
         "primary": "okinto/gpt-5.4",
         "fallbacks": ["okinto/gpt-5.2"]
       },
-      "thinkingDefault": "minimal",
+      "thinkingDefault": "high",
       "verboseDefault": "off",
-      "timeoutSeconds": 600
+      "timeoutSeconds": 1200
     }
   },
   "tools": {
