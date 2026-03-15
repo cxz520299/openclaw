@@ -8,6 +8,9 @@ RUN apt-get update \
 
 RUN npm install -g openclaw@latest clawhub @openai/codex
 
+RUN mkdir -p /usr/local/lib/node_modules/openclaw/extensions/acpx/node_modules \
+    && chown -R node:node /usr/local/lib/node_modules/openclaw/extensions
+
 RUN pip3 install --break-system-packages --no-cache-dir \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     "bilibili-api-python>=17.1.4" \

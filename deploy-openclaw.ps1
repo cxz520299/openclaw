@@ -33,6 +33,7 @@ $Include = @(
     "data/workspace/IDENTITY.md",
     "data/workspace/SOUL.md",
     "data/workspace/TOOLS.md",
+    "data/workspace/.openclaw/skills",
     "plugins",
     "scripts",
     "services",

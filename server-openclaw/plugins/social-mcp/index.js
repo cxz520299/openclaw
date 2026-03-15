@@ -1340,14 +1340,32 @@ export default function register(api) {
           type: "string",
           description: "For example: xhs_auth_status, xhs_search_note, xhs_get_note_detail."
         },
+        action: {
+          type: "string",
+          enum: ["status", "login", "search", "discover", "detail"]
+        },
+        keyword: {
+          type: "string"
+        },
+        note_id: {
+          type: "string"
+        },
         input: {
           type: "object",
           additionalProperties: true
+        },
+        arguments: {
+          type: "object",
+          additionalProperties: true
         }
-      },
-      required: ["tool"]
+      }
     },
-    execute: async ({ tool, input = {} }) => {
+    execute: async (payload = {}) => {
+      const tool = payload?.tool || inferToolFromPayload("xiaohongshu", payload);
+      if (!tool) {
+        throw new Error("Tool is required. You can also use action=status|login|search|discover|detail.");
+      }
+      const input = buildFlatInput(tool, payload);
       const result = await callToolForPlatform(state, "xiaohongshu", tool, input, api);
       return stringify({
         platform: "xiaohongshu",
@@ -1387,5 +1405,166 @@ export default function register(api) {
       properties: {}
     },
     execute: async () => stringify([await getPlatformStatus(state, "xiaohongshu", api)])
+  });
+
+  api.registerTool({
+    name: "weibo_mcp_call",
+    label: "Weibo MCP Call",
+    description: "Invoke a Weibo MCP tool directly. Prefer this tool for Weibo tasks.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        tool: {
+          type: "string",
+          description: "For example: search_content, search_topics, get_hot_feeds, get_comments."
+        },
+        action: {
+          type: "string",
+          enum: ["search", "discover", "detail"]
+        },
+        keyword: {
+          type: "string"
+        },
+        input: {
+          type: "object",
+          additionalProperties: true
+        },
+        arguments: {
+          type: "object",
+          additionalProperties: true
+        }
+      }
+    },
+    execute: async (payload = {}) => {
+      const tool =
+        payload?.tool ||
+        inferToolFromPayload("weibo", payload) ||
+        (payload?.keyword ? "search_content" : "get_hot_feeds");
+      const input = buildFlatInput(tool, payload);
+      const result = await callToolForPlatform(state, "weibo", tool, input, api);
+      return stringify({
+        platform: "weibo",
+        tool,
+        isError: result.isError,
+        text: result.text,
+        structuredContent: result.structuredContent
+      });
+    }
+  });
+
+  api.registerTool({
+    name: "weibo_mcp_list_tools",
+    label: "Weibo MCP List Tools",
+    description: "List available Weibo MCP tools.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {}
+    },
+    execute: async () => {
+      const tools = await getToolsForPlatform(state, "weibo", api);
+      return stringify({
+        platform: "weibo",
+        tools
+      });
+    }
+  });
+
+  api.registerTool({
+    name: "weibo_mcp_status",
+    label: "Weibo MCP Status",
+    description: "Check whether the Weibo MCP backend is reachable.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {}
+    },
+    execute: async () => stringify([await getPlatformStatus(state, "weibo", api)])
+  });
+
+  api.registerTool({
+    name: "bilibili_mcp_call",
+    label: "Bilibili MCP Call",
+    description: "Invoke a Bilibili MCP tool directly. Prefer this tool for Bilibili tasks.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        tool: {
+          type: "string",
+          description: "For example: general_search, search_user, get_precise_results, get_video_danmaku."
+        },
+        action: {
+          type: "string",
+          enum: ["search", "detail"]
+        },
+        keyword: {
+          type: "string"
+        },
+        search_type: {
+          type: "string"
+        },
+        page: {
+          type: "integer"
+        },
+        bv_id: {
+          type: "string"
+        },
+        input: {
+          type: "object",
+          additionalProperties: true
+        },
+        arguments: {
+          type: "object",
+          additionalProperties: true
+        }
+      }
+    },
+    execute: async (payload = {}) => {
+      const tool =
+        payload?.tool ||
+        inferToolFromPayload("bilibili", payload) ||
+        (payload?.keyword ? "general_search" : null);
+      if (!tool) {
+        throw new Error("Tool is required. You can also provide keyword to default to general_search.");
+      }
+      const input = buildFlatInput(tool, payload);
+      const result = await callToolForPlatform(state, "bilibili", tool, input, api);
+      return stringify({
+        platform: "bilibili",
+        tool,
+        isError: result.isError,
+        text: result.text,
+        structuredContent: result.structuredContent
+      });
+    }
+  });
+
+  api.registerTool({
+    name: "bilibili_mcp_list_tools",
+    label: "Bilibili MCP List Tools",
+    description: "List available Bilibili MCP tools.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {}
+    },
+    execute: async () => stringify({
+      platform: "bilibili",
+      tools: BILIBILI_FALLBACK_TOOLS
+    })
+  });
+
+  api.registerTool({
+    name: "bilibili_mcp_status",
+    label: "Bilibili MCP Status",
+    description: "Check whether the Bilibili MCP backend is reachable.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {}
+    },
+    execute: async () => stringify([await getPlatformStatus(state, "bilibili", api)])
   });
 }
