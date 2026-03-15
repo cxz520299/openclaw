@@ -23,15 +23,17 @@
     </style>
     <script>
       (function () {
+        var defaultSession = "desk";
         var gatewayUrl =
           (location.protocol === "https:" ? "wss://" : "ws://") +
           location.host +
           "/ws";
         var current = new URLSearchParams((location.hash || "").replace(/^#/, ""));
+        var currentSession = current.get("session") || "";
         var required = new URLSearchParams({
           gatewayUrl: gatewayUrl,
           token: "t8aNBF3bd7bxlWtFM+3IqxGa2+utiEKFcGjL/xarLDvr07IWu+UDlVSywwz5DmGo",
-          session: current.get("session") || "main"
+          session: !currentSession || currentSession === "main" ? defaultSession : currentSession
         });
         var requiredHash = required.toString();
 
