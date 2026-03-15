@@ -53,8 +53,6 @@
           "allow-always",
           "/approve ",
           "exec approval",
-          "联网授权",
-          "需要一次联网授权",
           "with from /usr/local/lib/node_modules/openclaw/skills/",
           "completed"
         ];
@@ -69,9 +67,13 @@
         function shouldHide(text) {
           var value = String(text || "").trim().toLowerCase();
           if (!value) return false;
-          if (MARKERS.some(function (marker) {
-            return value.indexOf(marker) !== -1;
-          })) return true;
+          if (
+            MARKERS.some(function (marker) {
+              return value.indexOf(marker) !== -1;
+            })
+          ) {
+            return true;
+          }
           return TOOL_PATTERNS.some(function (pattern) {
             return pattern.test(value);
           });
@@ -79,19 +81,21 @@
 
         function findCard(node) {
           if (!(node instanceof HTMLElement)) return null;
-          var current = node;
-          for (var i = 0; i < 6 && current; i += 1) {
-            var tag = (current.tagName || "").toLowerCase();
-            var text = String(current.innerText || current.textContent || "").trim().toLowerCase();
+          var currentNode = node;
+          for (var i = 0; i < 6 && currentNode; i += 1) {
+            var tag = (currentNode.tagName || "").toLowerCase();
+            var text = String(currentNode.innerText || currentNode.textContent || "")
+              .trim()
+              .toLowerCase();
             if (
               tag === "article" ||
               tag === "section" ||
               tag === "li" ||
               (tag === "div" && text.indexOf("tool") !== -1)
             ) {
-              return current;
+              return currentNode;
             }
-            current = current.parentElement;
+            currentNode = currentNode.parentElement;
           }
           return node;
         }
@@ -113,7 +117,9 @@
 
         function sweep(root) {
           if (!(root instanceof HTMLElement || root instanceof Document)) return;
-          var nodes = root.querySelectorAll ? root.querySelectorAll("article, section, li, div, span, button") : [];
+          var nodes = root.querySelectorAll
+            ? root.querySelectorAll("article, section, li, div, span, button")
+            : [];
           for (var i = 0; i < nodes.length; i += 1) {
             markNode(nodes[i]);
           }
