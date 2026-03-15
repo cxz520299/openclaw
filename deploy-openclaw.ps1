@@ -39,6 +39,12 @@ Write-Host "Deploy target: $Server:$RemoteDir"
 
 ssh $Server "mkdir -p $RemoteDir"
 
+$Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$BackupPath = "/root/openclaw-backup-$Timestamp.tar.gz"
+
+Write-Host "Creating remote backup: $BackupPath"
+ssh $Server "tar -czf $BackupPath -C /opt openclaw && ls -lh $BackupPath"
+
 foreach ($item in $Include) {
     $localPath = Join-Path $SourceDir $item
     if (-not (Test-Path $localPath)) {
@@ -50,7 +56,14 @@ foreach ($item in $Include) {
     scp -r $localPath "${Server}:$RemoteDir/"
 }
 
+Write-Host "Validating compose configuration"
+ssh $Server "cd $RemoteDir && docker compose config > /tmp/openclaw-compose.rendered.yml"
+
 Write-Host "Restarting containers"
 ssh $Server "cd $RemoteDir && docker compose up -d --build"
+
+Write-Host "Checking container health"
+ssh $Server "docker ps --format 'table {{.Names}}\t{{.Status}}' | grep openclaw"
+ssh $Server "curl -fsS http://127.0.0.1:18789/healthz"
 
 Write-Host "Deployment finished"

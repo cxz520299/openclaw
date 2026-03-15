@@ -34,7 +34,15 @@ cd D:\openclaw
 .\deploy-openclaw.ps1
 ```
 
-This script uploads the maintained deployment files back to `root@8.147.63.36:/opt/openclaw` and runs:
+This script now performs:
+
+- remote backup of `/opt/openclaw`
+- file upload to `root@8.147.63.36:/opt/openclaw`
+- `docker compose config` validation
+- `docker compose up -d --build`
+- health check against `127.0.0.1:18789/healthz`
+
+The restart command is:
 
 ```bash
 docker compose up -d --build
@@ -58,3 +66,11 @@ This workspace can be versioned safely because the following are ignored:
 - `server-openclaw/data/`
 
 Use `server-openclaw/.env.example` as the committed environment template.
+
+## Suggested remote Git repo
+
+Use the ECS host itself as the remote repository target:
+
+```text
+ssh://root@8.147.63.36/opt/git/openclaw-config.git
+```
