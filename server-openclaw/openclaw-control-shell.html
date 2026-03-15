@@ -29,67 +29,59 @@
           location.host +
           "/ws";
         var current = new URLSearchParams((location.hash || "").replace(/^#/, ""));
+        var changed = false;
         var currentSession = current.get("session") || "";
-        var required = new URLSearchParams({
-          gatewayUrl: gatewayUrl,
-          token: "t8aNBF3bd7bxlWtFM+3IqxGa2+utiEKFcGjL/xarLDvr07IWu+UDlVSywwz5DmGo",
-          session: !currentSession || currentSession === "main" ? defaultSession : currentSession
-        });
-        var requiredHash = required.toString();
+        var nextSession = !currentSession || currentSession === "main" ? defaultSession : currentSession;
 
-        if (location.hash.replace(/^#/, "") !== requiredHash) {
-          location.replace("/app/#" + requiredHash);
+        if (current.get("gatewayUrl") !== gatewayUrl) {
+          current.set("gatewayUrl", gatewayUrl);
+          changed = true;
+        }
+
+        if (current.get("token") !== "t8aNBF3bd7bxlWtFM+3IqxGa2+utiEKFcGjL/xarLDvr07IWu+UDlVSywwz5DmGo") {
+          current.set("token", "t8aNBF3bd7bxlWtFM+3IqxGa2+utiEKFcGjL/xarLDvr07IWu+UDlVSywwz5DmGo");
+          changed = true;
+        }
+
+        if (current.get("session") !== nextSession) {
+          current.set("session", nextSession);
+          changed = true;
+        }
+
+        if (changed) {
+          location.replace("/app/#" + current.toString());
           return;
         }
 
-        var MARKERS = [
-          "1 tool read",
-          "1 tool exec",
-          "tool read",
-          "tool exec",
-          "tool web_fetch",
-          "web_fetch",
-          "tool call",
-          "tool output",
-          "allow-once",
-          "allow-always",
-          "/approve ",
-          "exec approval",
+        var HIDE_MARKERS = [
           "read heartbeat.md if it exists",
-          "workspace context",
-          "follow it strictly",
           "reply heartbeat_ok",
-          "current time:",
           "do not infer or repeat old tasks from prior chats",
           "<available_skills>",
           "<skill>",
-          "with from /usr/local/lib/node_modules/openclaw/skills/",
-          "completed"
+          "with from /usr/local/lib/node_modules/openclaw/skills/"
         ];
 
-        var TOOL_PATTERNS = [
-          /\b\d+\s+tool\s+(read|exec|web_fetch|call|output)\b/i,
-          /\btool\s+(read|exec|web_fetch|call|output)\b/i,
+        var HIDE_PATTERNS = [
+          /\bread heartbeat\.md if it exists\b/i,
+          /\breply heartbeat_ok\b/i,
+          /\bdo not infer or repeat old tasks from prior chats\b/i,
           /\bwith\s+from\s+\/usr\/local\/lib\/node_modules\/openclaw\/skills\//i,
-          /\b\/approve\b/i,
-          /\bheartbeat\.md\b/i,
-          /\bheartbeat_ok\b/i,
-          /\bworkspace context\b/i,
-          /\bavailable_skills\b/i,
-          /\ballow-(once|always)\b/i
+          /<available_skills>/i,
+          /<skill>/i
         ];
 
         function shouldHide(text) {
           var value = String(text || "").trim().toLowerCase();
           if (!value) return false;
           if (
-            MARKERS.some(function (marker) {
+            HIDE_MARKERS.some(function (marker) {
               return value.indexOf(marker) !== -1;
             })
           ) {
             return true;
           }
-          return TOOL_PATTERNS.some(function (pattern) {
+          return HIDE_PATTERNS.some(function (pattern) {
             return pattern.test(value);
           });
         }
@@ -117,6 +109,12 @@
 
         function markNode(node) {
           if (!(node instanceof HTMLElement)) return;
+          if (
+            node.dataset.xzKeepVisible === "1" ||
+            node.closest("[data-xz-keep-visible='1']")
+          ) {
+            return;
+          }
 
           var text = (node.innerText || node.textContent || "").trim();
           if (!shouldHide(text)) return;
@@ -143,8 +141,24 @@
           }
         }
 
+        function protectComposer(root) {
+          if (!(root instanceof HTMLElement || root instanceof Document)) return;
+          var composer = root.querySelector
+            ? root.querySelector(
+                "textarea, input[type='text'], input:not([type]), [contenteditable='true']"
+              )
+            : null;
+          if (!(composer instanceof HTMLElement)) return;
+          composer.setAttribute("data-xz-keep-visible", "1");
+          var composerCard = findCard(composer);
+          if (composerCard instanceof HTMLElement) {
+            composerCard.setAttribute("data-xz-keep-visible", "1");
+          }
+        }
+
         document.addEventListener("DOMContentLoaded", function () {
           document.body.setAttribute("data-xz-clean-ui", "1");
+          protectComposer(document);
           sweep(document);
           var observer = new MutationObserver(function (mutations) {
             for (var i = 0; i < mutations.length; i += 1) {
@@ -152,6 +166,7 @@
               for (var j = 0; j < mutation.addedNodes.length; j += 1) {
                 var added = mutation.addedNodes[j];
                 if (added instanceof HTMLElement) {
+                  protectComposer(added);
                   sweep(added);
                 }
               }

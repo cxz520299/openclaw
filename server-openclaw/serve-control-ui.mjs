@@ -25,11 +25,6 @@ const mimeTypes = {
 };
 
 function bootstrapHtml() {
-  const hash = new URLSearchParams({
-    gatewayUrl,
-    token: gatewayToken,
-    session: "main"
-  }).toString();
   return `<!doctype html>
 <html lang="zh-CN">
   <head>
@@ -40,7 +35,11 @@ function bootstrapHtml() {
   <body>
     <script>
       (function() {
-        location.replace("/app/#" + ${JSON.stringify(hash)});
+        var current = new URLSearchParams((location.hash || "").replace(/^#/, ""));
+        if (!current.get("gatewayUrl")) current.set("gatewayUrl", ${JSON.stringify(gatewayUrl)});
+        if (!current.get("token")) current.set("token", ${JSON.stringify(gatewayToken)});
+        if (!current.get("session") || current.get("session") === "main") current.set("session", "desk");
+        location.replace("/app/#" + current.toString());
       })();
     </script>
   </body>

@@ -20,17 +20,11 @@
           "params": {
             "maxTokens": 12288
           }
-        },
-        "okinto/gpt-5.2": {
-          "alias": "gpt-fallback",
-          "params": {
-            "maxTokens": 12288
-          }
         }
       },
       "model": {
         "primary": "okinto/gpt-5.4",
-        "fallbacks": ["okinto/gpt-5.2"]
+        "fallbacks": []
       },
       "thinkingDefault": "high",
       "verboseDefault": "off",
@@ -131,7 +125,7 @@
     "exec": {
       "applyPatch": {
         "enabled": true,
-        "allowModels": ["gpt-5.4", "gpt-5.2"]
+        "allowModels": ["gpt-5.4"]
       }
     }
   },
@@ -172,20 +166,6 @@
           {
             "id": "gpt-5.4",
             "name": "GPT-5.4",
-            "reasoning": false,
-            "input": ["text", "image"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
-            "contextWindow": 200000,
-            "maxTokens": 12288
-          },
-          {
-            "id": "gpt-5.2",
-            "name": "GPT-5.2",
             "reasoning": false,
             "input": ["text", "image"],
             "cost": {

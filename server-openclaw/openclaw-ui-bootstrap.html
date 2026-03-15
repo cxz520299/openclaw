@@ -12,14 +12,11 @@
           (location.protocol === "https:" ? "wss://" : "ws://") +
           location.host +
           "/ws";
-        location.replace(
-          "/app/#" +
-            new URLSearchParams({
-              gatewayUrl: gatewayUrl,
-              token: "t8aNBF3bd7bxlWtFM+3IqxGa2+utiEKFcGjL/xarLDvr07IWu+UDlVSywwz5DmGo",
-              session: "desk"
-            }).toString()
-        );
+        var current = new URLSearchParams((location.hash || "").replace(/^#/, ""));
+        if (!current.get("gatewayUrl")) current.set("gatewayUrl", gatewayUrl);
+        if (!current.get("token")) current.set("token", "t8aNBF3bd7bxlWtFM+3IqxGa2+utiEKFcGjL/xarLDvr07IWu+UDlVSywwz5DmGo");
+        if (!current.get("session") || current.get("session") === "main") current.set("session", "desk");
+        location.replace("/app/#" + current.toString());
       })();
     </script>
   </body>
