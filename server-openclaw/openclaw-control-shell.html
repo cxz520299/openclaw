@@ -156,9 +156,131 @@
           }
         }
 
+        var chatWatchdog = {
+          lastSignature: "",
+          lastActivityAt: Date.now(),
+          lastConnectAt: 0,
+          lastRefreshAt: 0,
+          refreshInFlight: false
+        };
+
+        function getOpenClawApp() {
+          var app = document.querySelector("openclaw-app");
+          return app instanceof HTMLElement ? app : null;
+        }
+
+        function getChatSignature(app) {
+          return [
+            app.connected ? "1" : "0",
+            app.sessionKey || "",
+            app.chatRunId || "",
+            app.chatLoading ? "1" : "0",
+            app.chatStream || "",
+            Array.isArray(app.chatQueue) ? app.chatQueue.length : 0,
+            Array.isArray(app.chatMessages) ? app.chatMessages.length : 0,
+            app.lastError || ""
+          ].join("|");
+        }
+
+        function shouldWatchChat(app) {
+          if (!app || app.tab !== "chat") return false;
+          return Boolean(
+            app.chatRunId ||
+              app.chatLoading ||
+              (Array.isArray(app.chatQueue) && app.chatQueue.length > 0) ||
+              !app.connected ||
+              app.lastError
+          );
+        }
+
+        function refreshChatHistory(app) {
+          if (!app || !app.client || !app.connected || !app.sessionKey || chatWatchdog.refreshInFlight) {
+            return;
+          }
+          chatWatchdog.refreshInFlight = true;
+          chatWatchdog.lastRefreshAt = Date.now();
+          Promise.resolve(
+            app.client.request("chat.history", {
+              sessionKey: app.sessionKey,
+              limit: 200
+            })
+          )
+            .then(function (res) {
+              var messages = Array.isArray(res && res.messages) ? res.messages : [];
+              var lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
+              app.chatMessages = messages;
+              app.chatThinkingLevel = res && res.thinkingLevel ? res.thinkingLevel : null;
+              app.chatStream = null;
+              app.chatStreamStartedAt = null;
+              if (lastMessage && lastMessage.role === "assistant") {
+                app.chatRunId = null;
+                app.chatLoading = false;
+              }
+              if (messages.length > 0) {
+                chatWatchdog.lastActivityAt = Date.now();
+                chatWatchdog.lastSignature = getChatSignature(app);
+              }
+            })
+            .catch(function () {})
+            .finally(function () {
+              chatWatchdog.refreshInFlight = false;
+            });
+        }
+
+        function nudgeChatConnection(app) {
+          if (!app) return;
+          var now = Date.now();
+          if (!app.connected || !app.client) {
+            if (typeof app.connect === "function" && now - chatWatchdog.lastConnectAt > 4000) {
+              chatWatchdog.lastConnectAt = now;
+              app.connect();
+            }
+            return;
+          }
+          if (now - chatWatchdog.lastRefreshAt > 2500) {
+            refreshChatHistory(app);
+          }
+        }
+
+        function startChatWatchdog() {
+          window.setInterval(function () {
+            var app = getOpenClawApp();
+            if (!app) return;
+
+            var signature = getChatSignature(app);
+            if (signature !== chatWatchdog.lastSignature) {
+              chatWatchdog.lastSignature = signature;
+              chatWatchdog.lastActivityAt = Date.now();
+            }
+
+            if (!shouldWatchChat(app)) {
+              return;
+            }
+
+            var queueLength = Array.isArray(app.chatQueue) ? app.chatQueue.length : 0;
+            var stalled =
+              (app.chatRunId || app.chatLoading || queueLength > 0) &&
+              Date.now() - chatWatchdog.lastActivityAt > 3000;
+
+            if (stalled || !app.connected || app.lastError) {
+              nudgeChatConnection(app);
+            }
+          }, 1500);
+
+          document.addEventListener("visibilitychange", function () {
+            if (document.visibilityState !== "visible") return;
+            nudgeChatConnection(getOpenClawApp());
+          });
+
+          window.addEventListener("focus", function () {
+            nudgeChatConnection(getOpenClawApp());
+          });
+        }
+
         document.addEventListener("DOMContentLoaded", function () {
           document.body.setAttribute("data-xz-clean-ui", "1");
           protectComposer(document);
+          startChatWatchdog();
           sweep(document);
           var observer = new MutationObserver(function (mutations) {
             for (var i = 0; i < mutations.length; i += 1) {
