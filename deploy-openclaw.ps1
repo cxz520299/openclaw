@@ -35,7 +35,7 @@ $Include = @(
 )
 
 Write-Host "Deploy source: $SourceDir"
-Write-Host "Deploy target: $Server:$RemoteDir"
+Write-Host "Deploy target: ${Server}:$RemoteDir"
 
 ssh $Server "mkdir -p $RemoteDir"
 
