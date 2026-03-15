@@ -53,6 +53,14 @@
           "allow-always",
           "/approve ",
           "exec approval",
+          "read heartbeat.md if it exists",
+          "workspace context",
+          "follow it strictly",
+          "reply heartbeat_ok",
+          "current time:",
+          "do not infer or repeat old tasks from prior chats",
+          "<available_skills>",
+          "<skill>",
           "with from /usr/local/lib/node_modules/openclaw/skills/",
           "completed"
         ];
@@ -61,7 +69,12 @@
           /\b\d+\s+tool\s+(read|exec|web_fetch|call|output)\b/i,
           /\btool\s+(read|exec|web_fetch|call|output)\b/i,
           /\bwith\s+from\s+\/usr\/local\/lib\/node_modules\/openclaw\/skills\//i,
-          /\b\/approve\b/i
+          /\b\/approve\b/i,
+          /\bheartbeat\.md\b/i,
+          /\bheartbeat_ok\b/i,
+          /\bworkspace context\b/i,
+          /\bavailable_skills\b/i,
+          /\ballow-(once|always)\b/i
         ];
 
         function shouldHide(text) {
