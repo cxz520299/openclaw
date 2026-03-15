@@ -10,6 +10,7 @@ ai.euzhi.com {
   @root path /
   handle @root {
     root * /srv
+    header Cache-Control "no-store, max-age=0"
     file_server
   }
 
@@ -23,18 +24,21 @@ ai.euzhi.com {
 
   handle /app/assets/* {
     root * /srv
+    header Cache-Control "no-store, max-age=0"
     file_server
   }
 
   @app_shell path /app /app/
   handle @app_shell {
     root * /srv
+    header Cache-Control "no-store, max-age=0"
     rewrite * /openclaw-control-shell.html
     file_server
   }
 
   handle /app/* {
     root * /srv
+    header Cache-Control "no-store, max-age=0"
     try_files {path} /openclaw-control-shell.html
     file_server
   }
