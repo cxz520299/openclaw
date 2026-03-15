@@ -182,11 +182,26 @@
           ].join("|");
         }
 
+        function getLastChatMessage(app) {
+          if (!app || !Array.isArray(app.chatMessages) || app.chatMessages.length === 0) {
+            return null;
+          }
+          return app.chatMessages[app.chatMessages.length - 1];
+        }
+
+        function hasPendingAssistantReply(app) {
+          var lastMessage = getLastChatMessage(app);
+          if (!lastMessage || typeof lastMessage !== "object") return false;
+          var role = typeof lastMessage.role === "string" ? lastMessage.role : "";
+          return role !== "" && role !== "assistant";
+        }
+
         function shouldWatchChat(app) {
           if (!app || app.tab !== "chat") return false;
           return Boolean(
             app.chatRunId ||
               app.chatLoading ||
+              hasPendingAssistantReply(app) ||
               (Array.isArray(app.chatQueue) && app.chatQueue.length > 0) ||
               !app.connected ||
               app.lastError
@@ -210,11 +225,19 @@
               var lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
               app.chatMessages = messages;
               app.chatThinkingLevel = res && res.thinkingLevel ? res.thinkingLevel : null;
-              app.chatStream = null;
-              app.chatStreamStartedAt = null;
               if (lastMessage && lastMessage.role === "assistant") {
+                app.chatStream = null;
+                app.chatStreamStartedAt = null;
                 app.chatRunId = null;
                 app.chatLoading = false;
+              } else if (lastMessage && lastMessage.role) {
+                app.chatLoading = true;
+                if (app.chatStream === null) {
+                  app.chatStream = "";
+                }
+                if (!app.chatStreamStartedAt) {
+                  app.chatStreamStartedAt = Date.now();
+                }
               }
               if (messages.length > 0) {
                 chatWatchdog.lastActivityAt = Date.now();
@@ -230,6 +253,15 @@
         function nudgeChatConnection(app) {
           if (!app) return;
           var now = Date.now();
+          if (hasPendingAssistantReply(app)) {
+            app.chatLoading = true;
+            if (app.chatStream === null) {
+              app.chatStream = "";
+            }
+            if (!app.chatStreamStartedAt) {
+              app.chatStreamStartedAt = now;
+            }
+          }
           if (!app.connected || !app.client) {
             if (typeof app.connect === "function" && now - chatWatchdog.lastConnectAt > 4000) {
               chatWatchdog.lastConnectAt = now;
@@ -259,7 +291,7 @@
 
             var queueLength = Array.isArray(app.chatQueue) ? app.chatQueue.length : 0;
             var stalled =
-              (app.chatRunId || app.chatLoading || queueLength > 0) &&
+              (app.chatRunId || app.chatLoading || queueLength > 0 || hasPendingAssistantReply(app)) &&
               Date.now() - chatWatchdog.lastActivityAt > 3000;
 
             if (stalled || !app.connected || app.lastError) {
