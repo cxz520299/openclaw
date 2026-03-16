@@ -115,6 +115,23 @@ const XIAOHONGSHU_FALLBACK_TOOLS = [
     }
   }
 ];
+const DOUYIN_SEARCH_TOOL_CANDIDATES = [
+  "search_content",
+  "search_video",
+  "search_videos",
+  "search_general",
+  "search_aweme",
+  "search_note",
+  "search"
+];
+const DOUYIN_DISCOVER_TOOL_CANDIDATES = [
+  "get_trending",
+  "get_trendings",
+  "get_hot_list",
+  "get_hot_feeds",
+  "discover",
+  "feed"
+];
 
 function getPluginConfig(api) {
   return api?.config?.plugins?.entries?.[PLUGIN_ID]?.config ?? {};
@@ -141,6 +158,14 @@ function getPlatformConfig(api) {
       args: Array.isArray(cfg.xiaohongshuArgs)
         ? cfg.xiaohongshuArgs
         : ["-y", "xhs-mcp", "mcp"]
+    },
+    douyin: {
+      mode: cfg.douyinUrl ? "http" : "stdio",
+      url: cfg.douyinUrl || null,
+      command: cfg.douyinCommand || "npx",
+      args: Array.isArray(cfg.douyinArgs)
+        ? cfg.douyinArgs
+        : ["-y", "@mcpflow.io/mcp-douyin"]
     }
   };
 }
@@ -1154,6 +1179,14 @@ function inferPlatformFromToolName(toolName) {
     return "xiaohongshu";
   }
   if (
+    toolName.startsWith("douyin_") ||
+    toolName.startsWith("dy_") ||
+    toolName.startsWith("aweme_") ||
+    toolName.startsWith("tiktok_")
+  ) {
+    return "douyin";
+  }
+  if (
     toolName.startsWith("search_users") ||
     toolName.startsWith("get_profile") ||
     toolName.startsWith("get_feeds") ||
@@ -1174,6 +1207,15 @@ function inferPlatformFromToolName(toolName) {
     toolName.startsWith("get_video_danmaku")
   ) {
     return "bilibili";
+  }
+  if (
+    toolName.startsWith("search_video") ||
+    toolName.startsWith("search_videos") ||
+    toolName.startsWith("search_aweme") ||
+    toolName.startsWith("get_hot_list") ||
+    toolName.startsWith("get_video_detail")
+  ) {
+    return "douyin";
   }
   return null;
 }
@@ -1227,6 +1269,9 @@ function inferToolFromPayload(platform, payload) {
     if (platform === "xiaohongshu" && keyword) {
       return "xhs_search_note";
     }
+    if (platform === "douyin" && keyword) {
+      return "search";
+    }
     return null;
   }
 
@@ -1254,6 +1299,15 @@ function inferToolFromPayload(platform, payload) {
       search: "search_content",
       discover: "get_hot_feeds",
       detail: "get_comments"
+    };
+    return mapping[action] || null;
+  }
+
+  if (platform === "douyin") {
+    const mapping = {
+      search: "search",
+      discover: "get_hot_list",
+      detail: "get_video_detail"
     };
     return mapping[action] || null;
   }
@@ -1366,6 +1420,25 @@ async function getToolsForPlatform(state, platform, api) {
   }
 }
 
+async function callFirstWorkingTool(state, platform, tools, args, api) {
+  const errors = [];
+  for (const name of tools) {
+    try {
+      const result = await callToolForPlatform(state, platform, name, args, api);
+      if (!result?.isError) {
+        return {
+          ...result,
+          toolUsed: name
+        };
+      }
+      errors.push(`${name}: ${String(result.text || "tool returned error")}`);
+    } catch (error) {
+      errors.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  throw new Error(`No working ${platform} tool found. Tried: ${errors.join(" | ")}`);
+}
+
 async function callToolForPlatform(state, platform, tool, args, api) {
   if (platform === "bilibili") {
     return callBilibiliFallback(tool, args);
@@ -1412,19 +1485,19 @@ export default function register(api) {
   api.registerTool({
     name: "social_mcp_status",
     label: "Social MCP Status",
-    description: "Check whether the Bilibili, Weibo, and Xiaohongshu MCP backends are reachable.",
+    description: "Check whether the Bilibili, Weibo, Xiaohongshu, and Douyin MCP backends are reachable.",
     parameters: {
       type: "object",
       additionalProperties: false,
       properties: {
         platform: {
           type: "string",
-          enum: ["all", "bilibili", "weibo", "xiaohongshu"]
+          enum: ["all", "bilibili", "weibo", "xiaohongshu", "douyin"]
         }
       }
     },
     execute: async ({ platform = "all" }) => {
-      const platforms = platform === "all" ? ["bilibili", "weibo", "xiaohongshu"] : [platform];
+      const platforms = platform === "all" ? ["bilibili", "weibo", "xiaohongshu", "douyin"] : [platform];
       const rows = [];
 
       for (const item of platforms) {
@@ -1445,7 +1518,7 @@ export default function register(api) {
       properties: {
         platform: {
           type: "string",
-          enum: ["bilibili", "weibo", "xiaohongshu"]
+          enum: ["bilibili", "weibo", "xiaohongshu", "douyin"]
         }
       },
       required: ["platform"]
@@ -1459,7 +1532,7 @@ export default function register(api) {
         {};
       const resolvedPlatform = normalizePlatformInput(platform, tool, args);
       if (!resolvedPlatform) {
-        throw new Error("Platform is required. Supported values: bilibili, weibo, xiaohongshu.");
+        throw new Error("Platform is required. Supported values: bilibili, weibo, xiaohongshu, douyin.");
       }
 
       const tools = await getToolsForPlatform(state, resolvedPlatform, api);
@@ -1480,7 +1553,7 @@ export default function register(api) {
       properties: {
         platform: {
           type: "string",
-          enum: ["bilibili", "weibo", "xiaohongshu"]
+          enum: ["bilibili", "weibo", "xiaohongshu", "douyin"]
         },
         tool: {
           type: "string"
@@ -1545,7 +1618,7 @@ export default function register(api) {
       properties: {
         platform: {
           type: "string",
-          enum: ["bilibili", "weibo", "xiaohongshu"]
+          enum: ["bilibili", "weibo", "xiaohongshu", "douyin"]
         },
         tool: {
           type: "string"
@@ -1658,7 +1731,7 @@ export default function register(api) {
           type: "array",
           items: {
             type: "string",
-            enum: ["xiaohongshu", "bilibili", "weibo"]
+            enum: ["xiaohongshu", "bilibili", "weibo", "douyin"]
           }
         }
       }
@@ -2189,6 +2262,145 @@ export default function register(api) {
         platform: "bilibili",
         tool: "general_search",
         keyword,
+        isError: result.isError,
+        text: result.text,
+        structuredContent: result.structuredContent
+      });
+    }
+  });
+
+  api.registerTool({
+    name: "douyin_mcp_call",
+    label: "Douyin MCP Call",
+    description: "Invoke a Douyin MCP tool directly. Prefer this tool for Douyin tasks.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        tool: {
+          type: "string",
+          description: "Exact MCP tool name exposed by the Douyin backend."
+        },
+        action: {
+          type: "string",
+          enum: ["search", "discover", "detail"]
+        },
+        keyword: {
+          type: "string"
+        },
+        video_id: {
+          type: "string"
+        },
+        input: {
+          type: "object",
+          additionalProperties: true
+        },
+        arguments: {
+          type: "object",
+          additionalProperties: true
+        }
+      }
+    },
+    execute: async (payload = {}) => {
+      const tool = payload?.tool || inferToolFromPayload("douyin", payload);
+      if (!tool) {
+        throw new Error("Tool is required. You can also use action=search|discover|detail.");
+      }
+      const input = buildFlatInput(tool, payload);
+      const result = await callToolForPlatform(state, "douyin", tool, input, api);
+      return stringify({
+        platform: "douyin",
+        tool,
+        isError: result.isError,
+        text: result.text,
+        structuredContent: result.structuredContent
+      });
+    }
+  });
+
+  api.registerTool({
+    name: "douyin_mcp_list_tools",
+    label: "Douyin MCP List Tools",
+    description: "List available Douyin MCP tools.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {}
+    },
+    execute: async () => {
+      const tools = await getToolsForPlatform(state, "douyin", api);
+      return stringify({
+        platform: "douyin",
+        tools
+      });
+    }
+  });
+
+  api.registerTool({
+    name: "douyin_mcp_status",
+    label: "Douyin MCP Status",
+    description: "Check whether the Douyin MCP backend is reachable.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {}
+    },
+    execute: async () => stringify([await getPlatformStatus(state, "douyin", api)])
+  });
+
+  api.registerTool({
+    name: "douyin_search_keyword",
+    label: "Douyin Search Keyword",
+    description: "Search Douyin content by keyword using the first compatible tool exposed by the backend.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        keyword: {
+          type: "string"
+        }
+      },
+      required: ["keyword"]
+    },
+    execute: async ({ keyword }) => {
+      const result = await callFirstWorkingTool(
+        state,
+        "douyin",
+        DOUYIN_SEARCH_TOOL_CANDIDATES,
+        { keyword },
+        api
+      );
+      return stringify({
+        platform: "douyin",
+        tool: result.toolUsed || "unknown",
+        keyword,
+        isError: result.isError,
+        text: result.text,
+        structuredContent: result.structuredContent
+      });
+    }
+  });
+
+  api.registerTool({
+    name: "douyin_trending",
+    label: "Douyin Trending",
+    description: "Fetch Douyin trending content using the first compatible discovery tool exposed by the backend.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {}
+    },
+    execute: async () => {
+      const result = await callFirstWorkingTool(
+        state,
+        "douyin",
+        DOUYIN_DISCOVER_TOOL_CANDIDATES,
+        {},
+        api
+      );
+      return stringify({
+        platform: "douyin",
+        tool: result.toolUsed || "unknown",
         isError: result.isError,
         text: result.text,
         structuredContent: result.structuredContent

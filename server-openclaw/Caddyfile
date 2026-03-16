@@ -7,50 +7,15 @@ ai.euzhi.com {
     file_server browse
   }
 
-  @root path /
-  handle @root {
-    root * /srv
-    header Cache-Control "no-store, max-age=0"
-    file_server
-  }
-
-  handle /app/avatar/* {
-    reverse_proxy openclaw-gateway:18789
-  }
-
-  handle /app/__openclaw__/* {
-    reverse_proxy openclaw-gateway:18789
-  }
-
-  handle /app/assets/* {
-    root * /srv
-    header Cache-Control "no-store, max-age=0"
-    file_server
-  }
-
-  @app_shell path /app /app/
-  handle @app_shell {
-    root * /srv
-    header Cache-Control "no-store, max-age=0"
-    rewrite * /openclaw-control-shell.html
-    file_server
-  }
-
-  handle /app/* {
-    root * /srv
-    header Cache-Control "no-store, max-age=0"
-    try_files {path} /openclaw-control-shell.html
-    file_server
-  }
-
   handle /qq/* {
     reverse_proxy qq-bot-bridge:3400
   }
 
-  handle /ws {
+  handle {
     reverse_proxy openclaw-gateway:18789 {
-      header_up Host ai.euzhi.com
-      header_up Origin https://ai.euzhi.com
+      header_up Host {host}
+      header_up X-Forwarded-Host {host}
+      header_up X-Forwarded-Proto {scheme}
     }
   }
 }

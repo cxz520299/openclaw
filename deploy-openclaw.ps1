@@ -32,7 +32,7 @@ function Render-TemplateFile {
 
     $content = Get-Content $TemplatePath -Raw
     $content = $content.Replace("__OPENCLAW_GATEWAY_TOKEN__", $GatewayToken)
-    Set-Content -Path $OutputPath -Value $content -Encoding UTF8NoBOM
+    Set-Content -Path $OutputPath -Value $content -Encoding UTF8
 }
 
 $EnvPath = Join-Path $SourceDir ".env"

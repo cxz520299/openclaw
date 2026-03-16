@@ -1,6 +1,6 @@
 # Social MCP
 
-Use this skill when the user wants to retrieve or inspect content from Bilibili, Weibo, or Xiaohongshu through the `social_mcp_*` tools.
+Use this skill when the user wants to retrieve or inspect content from Bilibili, Weibo, Xiaohongshu, or Douyin through the `social_mcp_*` tools.
 
 ## Workflow
 
@@ -14,6 +14,7 @@ Use this skill when the user wants to retrieve or inspect content from Bilibili,
 - `bilibili`: Good for user search, keyword search, precise result lookup, and danmaku retrieval.
 - `weibo`: Good for hot topics, user search, feed search, comments, and profile lookups.
 - `xiaohongshu`: Often requires login. If login is needed, check login status first and use the QR-code related tools exposed by the MCP server.
+- `douyin`: Prefer `douyin_mcp_list_tools` first, because different Douyin MCP backends expose different exact tool names.
 
 ## Behavior
 

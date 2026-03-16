@@ -1,6 +1,10 @@
 {
   "gateway": {
     "mode": "local",
+    "trustedProxies": [
+      "127.0.0.1/32",
+      "172.16.0.0/12"
+    ],
     "controlUi": {
       "allowInsecureAuth": true,
       "dangerouslyDisableDeviceAuth": true,
@@ -62,6 +66,11 @@
       "bilibili_mcp_list_tools",
       "bilibili_mcp_call",
       "bilibili_search_keyword",
+      "douyin_mcp_status",
+      "douyin_mcp_list_tools",
+      "douyin_mcp_call",
+      "douyin_search_keyword",
+      "douyin_trending",
       "social_mcp_status",
       "social_mcp_list_tools",
       "social_mcp_call"
@@ -108,6 +117,11 @@
           "bilibili_mcp_list_tools",
           "bilibili_mcp_call",
           "bilibili_search_keyword",
+          "douyin_mcp_status",
+          "douyin_mcp_list_tools",
+          "douyin_mcp_call",
+          "douyin_search_keyword",
+          "douyin_trending",
           "social_mcp_status",
           "social_mcp_list_tools",
           "social_mcp_call",
@@ -150,6 +164,8 @@
           "xiaohongshuUrl": "http://xhs-mcp:3100/mcp",
           "xiaohongshuCommand": "npx",
           "xiaohongshuArgs": ["-y", "xhs-mcp", "mcp"],
+          "douyinCommand": "npx",
+          "douyinArgs": ["-y", "@mcpflow.io/mcp-douyin"],
           "timeoutMs": 180000
         }
       }

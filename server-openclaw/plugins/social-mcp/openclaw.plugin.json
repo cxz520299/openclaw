@@ -1,7 +1,7 @@
 {
   "id": "social-mcp",
   "name": "Social MCP",
-  "description": "Connect OpenClaw to Bilibili, Weibo, and Xiaohongshu MCP servers for social content retrieval.",
+  "description": "Connect OpenClaw to Bilibili, Weibo, Xiaohongshu, and Douyin MCP servers for social content retrieval.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -31,6 +31,19 @@
         "type": "array",
         "items": { "type": "string" },
         "description": "Arguments for the Xiaohongshu MCP command."
+      },
+      "douyinCommand": {
+        "type": "string",
+        "description": "Executable used to start the Douyin MCP server."
+      },
+      "douyinUrl": {
+        "type": "string",
+        "description": "Streamable HTTP MCP endpoint for Douyin."
+      },
+      "douyinArgs": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Arguments for the Douyin MCP command."
       },
       "timeoutMs": {
         "type": "number",
