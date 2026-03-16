@@ -1,8 +1,14 @@
 {
-  "name": "openclaw-social-mcp-plugin",
+  "name": "social-mcp",
   "version": "0.1.0",
   "private": true,
+  "description": "OpenClaw plugin for Bilibili, Weibo, Xiaohongshu, and Douyin MCP tools.",
   "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.2"
   }

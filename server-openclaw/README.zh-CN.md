@@ -267,6 +267,26 @@ bash scripts/bootstrap-ubuntu.sh
 docker compose up -d openclaw-web openclaw-ui
 ```
 
+如果服务器配置较小，建议优先只启动核心服务：
+
+```bash
+cd /opt/openclaw
+docker compose up -d openclaw-gateway openclaw-web
+```
+
+按需启用扩展能力：
+
+```bash
+# 社媒抓取能力
+docker compose --profile social up -d weibo-mcp xhs-mcp
+
+# QQ 机器人桥接
+docker compose --profile qq up -d qq-bot-bridge
+
+# 本地隧道调试控制台
+docker compose --profile ui up -d openclaw-ui
+```
+
 ### 5. 验证
 
 ```bash
@@ -325,6 +345,14 @@ docker compose restart openclaw-gateway openclaw-web openclaw-ui
 cd /opt/openclaw
 docker compose build --pull
 docker compose up -d
+```
+
+如果服务器资源紧张，建议改为分步重建，避免一次性拉起所有扩展服务：
+
+```bash
+cd /opt/openclaw
+docker compose build --pull openclaw-gateway openclaw-web
+docker compose up -d openclaw-gateway openclaw-web
 ```
 
 ### 执行 OpenClaw CLI 检查
@@ -448,3 +476,21 @@ docker compose logs --tail=100 openclaw-web
   - 只开放给固定 IP
 
 如果后面要收紧安全，可以在下一轮运维中继续处理。
+
+## 十二、容量优化建议
+
+为了降低小规格 ECS 的 CPU、内存和磁盘压力，当前编排建议按下面的策略运行：
+
+- 默认只保留 `openclaw-gateway` 和 `openclaw-web`。
+- `weibo-mcp`、`xhs-mcp` 改为 `social` profile，只有在需要社媒抓取时才启动。
+- `qq-bot-bridge` 改为 `qq` profile，只有在需要 QQ 机器人时才启动。
+- `openclaw-ui` 保持 `ui` profile，只在 SSH 隧道调试时启动。
+- 所有容器日志限制为单文件 `10m`、保留 `3` 份，减少磁盘膨胀。
+
+建议定期执行：
+
+```bash
+docker system df
+docker image prune -f
+docker builder prune -f
+```

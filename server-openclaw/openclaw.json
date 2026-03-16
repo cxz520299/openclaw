@@ -145,9 +145,6 @@
   },
   "plugins": {
     "allow": ["acpx", "social-mcp"],
-    "load": {
-      "paths": ["/opt/openclaw/plugins/social-mcp"]
-    },
     "entries": {
       "acpx": {
         "enabled": true,
@@ -159,14 +156,7 @@
         "enabled": true,
         "config": {
           "weiboUrl": "http://weibo-mcp:4200/mcp",
-          "bilibiliCommand": "python3",
-          "bilibiliArgs": ["/opt/openclaw/social-sources/bilibili.py"],
-          "xiaohongshuUrl": "http://xhs-mcp:3100/mcp",
-          "xiaohongshuCommand": "npx",
-          "xiaohongshuArgs": ["-y", "xhs-mcp", "mcp"],
-          "douyinCommand": "npx",
-          "douyinArgs": ["-y", "@mcpflow.io/mcp-douyin"],
-          "timeoutMs": 180000
+          "xiaohongshuUrl": "http://xhs-mcp:3100/mcp"
         }
       }
     }

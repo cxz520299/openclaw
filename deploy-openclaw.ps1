@@ -1,9 +1,17 @@
 param(
-    [string]$Server = "root@8.147.63.36",
+    [string]$Server = "",
     [string]$RemoteDir = "/opt/openclaw"
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $Server) {
+    $Server = $env:OPENCLAW_DEPLOY_SERVER
+}
+
+if (-not $Server) {
+    throw "Missing deploy server. Pass -Server root@your-host or set OPENCLAW_DEPLOY_SERVER."
+}
 
 $SourceDir = Join-Path $PSScriptRoot "server-openclaw"
 if (-not (Test-Path $SourceDir)) {

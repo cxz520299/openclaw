@@ -6,19 +6,22 @@ services:
     image: openclaw-vps:local
     restart: unless-stopped
     init: true
-    depends_on:
-      - weibo-mcp
-      - xhs-mcp
     environment:
       HOME: /home/node
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - ${OPENCLAW_DATA_DIR}:/home/node/.openclaw
       - ${OPENCLAW_DATA_DIR}/xhs:/home/node/.xhs-mcp
       - ./openclaw.json:/home/node/.openclaw/openclaw.json:ro
+      - ./plugins/social-mcp:/app/extensions/social-mcp:ro
       - ./okinto-openai-proxy.mjs:/opt/openclaw/okinto-openai-proxy.mjs:ro
       - ./forward-browser-ui.mjs:/opt/openclaw/forward-browser-ui.mjs:ro
       - ./start-openclaw.sh:/opt/openclaw/start-openclaw.sh:ro
@@ -48,6 +51,11 @@ services:
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - ${OPENCLAW_DATA_DIR}:/home/node/.openclaw
       - ./openclaw.json:/home/node/.openclaw/openclaw.json:ro
@@ -61,6 +69,11 @@ services:
     restart: unless-stopped
     depends_on:
       - openclaw-gateway
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - ./openclaw-ui-nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./openclaw-ui-bootstrap.html:/usr/share/nginx/html/index.html:ro
@@ -73,7 +86,11 @@ services:
     restart: unless-stopped
     depends_on:
       - openclaw-gateway
-      - qq-bot-bridge
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./openclaw-ui-bootstrap.html:/srv/index.html:ro
@@ -87,12 +104,19 @@ services:
       - "443:443"
 
   weibo-mcp:
+    profiles: ["social"]
     build:
       context: .
       dockerfile: services/weibo-mcp/Dockerfile
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   xhs-mcp:
+    profiles: ["social"]
     build:
       context: .
       dockerfile: services/xhs-mcp/Dockerfile
@@ -106,8 +130,14 @@ services:
       PUPPETEER_CACHE_DIR: /opt/puppeteer
     volumes:
       - ${OPENCLAW_DATA_DIR}/xhs:/home/node/.xhs-mcp
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   qq-bot-bridge:
+    profiles: ["qq"]
     image: openclaw-vps:local
     restart: unless-stopped
     depends_on:
@@ -128,6 +158,11 @@ services:
       - ./openclaw.json:/home/node/.openclaw/openclaw.json:ro
       - ./services/qq-bot-bridge:/opt/openclaw/services/qq-bot-bridge:ro
     command: ["node", "/opt/openclaw/services/qq-bot-bridge/server.mjs"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3400/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s

@@ -1,6 +1,8 @@
 ai.euzhi.com {
   encode zstd gzip
 
+  root * /srv
+
   handle /reports/* {
     root * /srv/reports
     uri strip_prefix /reports
@@ -11,11 +13,35 @@ ai.euzhi.com {
     reverse_proxy qq-bot-bridge:3400
   }
 
-  handle {
+  handle /app/avatar/* {
+    uri strip_prefix /app
+    reverse_proxy openclaw-gateway:18789
+  }
+
+  handle /app/__openclaw__/* {
+    uri strip_prefix /app
+    reverse_proxy openclaw-gateway:18789
+  }
+
+  handle /ws* {
     reverse_proxy openclaw-gateway:18789 {
       header_up Host {host}
       header_up X-Forwarded-Host {host}
       header_up X-Forwarded-Proto {scheme}
     }
+  }
+
+  handle /app/* {
+    try_files {path} /app/index.html
+    file_server
+  }
+
+  handle /openclaw-control-shell.html {
+    file_server
+  }
+
+  handle {
+    try_files /index.html
+    file_server
   }
 }

@@ -1,4 +1,4 @@
-ARG OPENCLAW_GIT_REF=756d9b57823217802b15c5b7d73a154fbd6bad85
+ARG OPENCLAW_GIT_REF=61d171a
 
 FROM node:24-bookworm AS build
 
@@ -88,6 +88,7 @@ RUN npm config set registry https://registry.npmmirror.com && \
     npm install -g clawhub @openai/codex xhs-mcp@latest
 
 RUN mkdir -p /opt/openclaw/plugins/social-mcp && \
+    mkdir -p /app/extensions && \
     mkdir -p /usr/local/lib/node_modules/openclaw/extensions/acpx/node_modules && \
     chown -R node:node /app /opt/openclaw /usr/local/lib/node_modules/openclaw/extensions
 
@@ -108,6 +109,7 @@ RUN npm config set registry https://registry.npmmirror.com && \
 WORKDIR /opt/openclaw
 COPY plugins/social-mcp /opt/openclaw/plugins/social-mcp
 COPY social-sources /opt/openclaw/social-sources
+RUN ln -sfn /opt/openclaw/plugins/social-mcp /app/extensions/social-mcp
 
 ENV HOME=/home/node \
     TERM=xterm-256color \

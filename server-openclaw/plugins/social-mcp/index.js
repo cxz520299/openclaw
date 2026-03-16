@@ -132,6 +132,29 @@ const DOUYIN_DISCOVER_TOOL_CANDIDATES = [
   "discover",
   "feed"
 ];
+const DOUYIN_FALLBACK_TOOLS = [
+  {
+    name: "search",
+    description: "Search Douyin content by keyword.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        keyword: { type: "string" }
+      },
+      required: ["keyword"]
+    }
+  },
+  {
+    name: "get_hot_list",
+    description: "Fetch Douyin hot topics.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {}
+    }
+  }
+];
 
 function getPluginConfig(api) {
   return api?.config?.plugins?.entries?.[PLUGIN_ID]?.config ?? {};
@@ -729,6 +752,95 @@ async function callWeiboTrendingFallback(args = {}) {
         ? `https://s.weibo.com/weibo?q=${encodeURIComponent(item.word_scheme)}`
         : `https://s.weibo.com/weibo?q=${encodeURIComponent(item.word || "")}`)
   }));
+
+  return {
+    isError: false,
+    text: JSON.stringify(structuredContent, null, 2),
+    structuredContent,
+    raw: data
+  };
+}
+
+async function callDouyinTrendingFallback(args = {}) {
+  const limit = Math.max(1, Number(args?.limit || 15) || 15);
+  const data = await fetchJson("https://www.iesdouyin.com/web/api/v2/hotsearch/billboard/word/", {
+    headers: {
+      referer: "https://www.douyin.com/",
+      "x-requested-with": "XMLHttpRequest"
+    }
+  });
+
+  const items = Array.isArray(data?.word_list) ? data.word_list : [];
+  const structuredContent = items.slice(0, limit).map((item, index) => ({
+    id: index + 1,
+    keyword: cleanText(item.word || ""),
+    hot_value: safeNumber(item.hot_value || item.hotValue || 0),
+    label: safeNumber(item.label || 0),
+    event_time: data?.active_time || null,
+    url: item.word
+      ? `https://www.douyin.com/hot/${encodeURIComponent(item.word)}`
+      : "https://www.douyin.com/hot"
+  }));
+
+  return {
+    isError: false,
+    text: JSON.stringify(structuredContent, null, 2),
+    structuredContent,
+    raw: data
+  };
+}
+
+async function callDouyinSearchFallback(args = {}) {
+  const keyword = String(args?.keyword || "").trim();
+  const count = Math.max(1, Math.min(10, Number(args?.count || 10) || 10));
+  if (!keyword) {
+    throw new Error("keyword is required for douyin search tools");
+  }
+
+  const url = new URL("https://www.douyin.com/aweme/v1/web/search/item/");
+  url.search = new URLSearchParams({
+    device_platform: "webapp",
+    aid: "6383",
+    channel: "channel_pc_web",
+    keyword,
+    count: String(count),
+    offset: "0",
+    search_channel: "aweme_general",
+    sort_type: "0",
+    publish_time: "0"
+  }).toString();
+
+  const data = await fetchJson(url.toString(), {
+    headers: {
+      referer: `https://www.douyin.com/search/${encodeURIComponent(keyword)}`,
+      origin: "https://www.douyin.com"
+    }
+  });
+
+  const nilInfo = data?.search_nil_info || {};
+  const items = Array.isArray(data?.data) ? data.data : [];
+  const awemeList = Array.isArray(data?.aweme_list) ? data.aweme_list : [];
+  const normalized = (awemeList.length > 0 ? awemeList : items)
+    .map((item) => item?.aweme_info || item)
+    .filter(Boolean)
+    .map((item) => ({
+      aweme_id: item.aweme_id || item.awemeId || null,
+      desc: cleanText(item.desc || item.description || ""),
+      author: cleanText(item?.author?.nickname || item?.author_name || ""),
+      create_time: safeNumber(item.create_time || item.createTime || 0),
+      statistics: item.statistics || null
+    }))
+    .filter((item) => item.aweme_id || item.desc);
+
+  const blocked = nilInfo?.search_nil_item === "verify_check";
+  const structuredContent = {
+    keyword,
+    blocked,
+    block_reason: blocked ? "verify_check" : null,
+    count: normalized.length,
+    items: normalized,
+    search_url: `https://www.douyin.com/search/${encodeURIComponent(keyword)}`
+  };
 
   return {
     isError: false,
@@ -1339,6 +1451,19 @@ function buildFlatInput(tool, payload) {
   return flat;
 }
 
+function readStringArg(payload, key) {
+  if (typeof payload?.[key] === "string" && payload[key].trim()) {
+    return payload[key].trim();
+  }
+  if (typeof payload?.input?.[key] === "string" && payload.input[key].trim()) {
+    return payload.input[key].trim();
+  }
+  if (typeof payload?.arguments?.[key] === "string" && payload.arguments[key].trim()) {
+    return payload.arguments[key].trim();
+  }
+  return "";
+}
+
 async function probeXiaohongshu(state, api) {
   const probes = [
     { tool: "xhs_auth_status", args: {} },
@@ -1373,6 +1498,25 @@ async function getPlatformStatus(state, platform, api) {
       note: "using direct bilibili web API fallback"
     };
   }
+  if (platform === "douyin") {
+    try {
+      const result = await callDouyinTrendingFallback({ limit: 1 });
+      return {
+        platform,
+        ok: true,
+        tools: DOUYIN_FALLBACK_TOOLS.map((tool) => tool.name),
+        degraded: true,
+        note: "using direct douyin web API fallback",
+        sampleCount: Array.isArray(result?.structuredContent) ? result.structuredContent.length : 0
+      };
+    } catch (error) {
+      return {
+        platform,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
   try {
     const tools = await listToolsForPlatform(state, platform, api);
     return {
@@ -1406,6 +1550,9 @@ async function getPlatformStatus(state, platform, api) {
 async function getToolsForPlatform(state, platform, api) {
   if (platform === "bilibili") {
     return BILIBILI_FALLBACK_TOOLS;
+  }
+  if (platform === "douyin") {
+    return DOUYIN_FALLBACK_TOOLS;
   }
   try {
     return await listToolsForPlatform(state, platform, api);
@@ -1443,6 +1590,34 @@ async function callToolForPlatform(state, platform, tool, args, api) {
   if (platform === "bilibili") {
     return callBilibiliFallback(tool, args);
   }
+  if (platform === "douyin") {
+    const isSearchTool =
+      DOUYIN_SEARCH_TOOL_CANDIDATES.includes(tool) ||
+      tool === "search" ||
+      tool === "search_content";
+    const isTrendingTool =
+      DOUYIN_DISCOVER_TOOL_CANDIDATES.includes(tool) ||
+      tool === "get_hot_list";
+    try {
+      const client = await withClient(state, platform, api);
+      const result = await client.callTool({
+        name: tool,
+        arguments: args || {}
+      });
+      return normalizeToolResult(result);
+    } catch (error) {
+      api.logger?.warn?.(
+        `[${PLUGIN_ID}] douyin tool ${tool} failed, using web fallback: ${error instanceof Error ? error.message : String(error)}`
+      );
+      if (isTrendingTool) {
+        return callDouyinTrendingFallback(args);
+      }
+      if (isSearchTool) {
+        return callDouyinSearchFallback(args);
+      }
+      throw error;
+    }
+  }
   if (platform === "weibo" && tool === "get_trendings") {
     try {
       const client = await withClient(state, platform, api);
@@ -1476,7 +1651,7 @@ async function callToolForPlatform(state, platform, tool, args, api) {
   return normalizeToolResult(result);
 }
 
-export default function register(api) {
+function register(api) {
   const state = {
     clients: new Map()
   };
@@ -1927,7 +2102,8 @@ export default function register(api) {
       },
       required: ["keyword"]
     },
-    execute: async ({ keyword }) => {
+    execute: async (payload = {}) => {
+      const keyword = readStringArg(payload, "keyword");
       const result = await callToolForPlatform(
         state,
         "xiaohongshu",
@@ -2132,7 +2308,8 @@ export default function register(api) {
       },
       required: ["keyword"]
     },
-    execute: async ({ keyword }) => {
+    execute: async (payload = {}) => {
+      const keyword = readStringArg(payload, "keyword");
       const result = await callToolForPlatform(
         state,
         "weibo",
@@ -2250,7 +2427,8 @@ export default function register(api) {
       },
       required: ["keyword"]
     },
-    execute: async ({ keyword }) => {
+    execute: async (payload = {}) => {
+      const keyword = readStringArg(payload, "keyword");
       const result = await callToolForPlatform(
         state,
         "bilibili",
@@ -2362,7 +2540,8 @@ export default function register(api) {
       },
       required: ["keyword"]
     },
-    execute: async ({ keyword }) => {
+    execute: async (payload = {}) => {
+      const keyword = readStringArg(payload, "keyword");
       const result = await callFirstWorkingTool(
         state,
         "douyin",
@@ -2408,3 +2587,12 @@ export default function register(api) {
     }
   });
 }
+
+const plugin = {
+  id: PLUGIN_ID,
+  name: "Social MCP",
+  description: "Connect OpenClaw to Bilibili, Weibo, Xiaohongshu, and Douyin MCP backends.",
+  register
+};
+
+export default plugin;

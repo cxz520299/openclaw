@@ -14,7 +14,7 @@
           "/ws";
         var current = new URLSearchParams((location.hash || "").replace(/^#/, ""));
         if (!current.get("gatewayUrl")) current.set("gatewayUrl", gatewayUrl);
-        if (!current.get("token")) current.set("token", "t8aNBF3bd7bxlWtFM+3IqxGa2+utiEKFcGjL/xarLDvr07IWu+UDlVSywwz5DmGo");
+        if (!current.get("token")) current.set("token", "__OPENCLAW_GATEWAY_TOKEN__");
         if (!current.get("session") || current.get("session") === "main") current.set("session", "desk");
         location.replace("/app/#" + current.toString());
       })();

@@ -1,4 +1,6 @@
 .codex-temp-askpass.cmd
+.learnings/
+README.local.md
 server-openclaw/.env
 server-openclaw/.env.bak-*
 server-openclaw/data/
