@@ -158,6 +158,7 @@ OPENCLAW_DATA_DIR=/opt/openclaw/data
 - 小红书 MCP
 - 微博 MCP
 - B 站 MCP
+- 企业微信文档 MCP
 
 推荐优先使用的工具：
 
@@ -165,11 +166,46 @@ OPENCLAW_DATA_DIR=/opt/openclaw/data
 - `social_report_build`
 - `xiaohongshu_mcp_call`
 - `social_mcp_call`
+- `wecom_doc_mcp_status`
+- `wecom_doc_mcp_list_tools`
+- `wecom_doc_mcp_call`
 
 其中：
 
 - `social_mcp_collect_and_report` 会直接完成“抓取 -> 保存原始 JSON -> 生成 CSV -> 生成图表 -> 输出摘要路径”
+- 企业微信文档 MCP 建议先调用 `wecom_doc_mcp_list_tools` 查看企业当前开放了哪些文档能力，再调用 `wecom_doc_mcp_call`
 - `social_report_build` 适合对已有 JSON 文件二次生成报告
+
+### 1.1 企业微信机器人长连接
+
+当前部署已经切到腾讯企业微信官方插件 `@wecom/wecom-openclaw-plugin`。
+
+首次启动时，网关会自动：
+
+- 从 npm 拉取官方企微插件
+- 安装到 OpenClaw 数据目录
+- 使用 `WECOM_BOT_ID` / `WECOM_BOT_SECRET` 建立长连接
+- 自动向企业微信拉取文档 MCP 配置
+
+需要在 `.env` 中准备：
+
+```env
+WECOM_BOT_ID=你的企业微信BotID
+WECOM_BOT_SECRET=你的企业微信Secret
+WECOM_PLUGIN_NPM_SPEC=@wecom/wecom-openclaw-plugin@1.0.11
+```
+
+常用验收日志：
+
+```bash
+docker compose logs -f openclaw-gateway | grep -i wecom
+```
+
+看到以下关键词通常表示接入成功：
+
+- `WebSocket connected`
+- `Authentication successful`
+- `MCP config fetched`
 
 ### 2. 图表与报表
 
@@ -207,6 +243,92 @@ OpenClaw 已放行 cron / automation 能力，适合做：
 - 独立会话
 - 清晰任务名
 - 需要回聊时使用 announce 类投递方式
+
+### 4. 视频流随机抽帧告警
+
+这套部署额外提供了 `stream-frame-watch` 服务，适合做：
+
+- 对视频文件或流地址随机抽一帧
+- 和基准图做差异比对
+- 差异超过阈值时，把异常帧发到企业微信群
+- 文本里可带 `@某人` 提醒
+
+配置文件：
+
+```bash
+server-openclaw/config/stream-frame-watch.json
+```
+
+关键字段：
+
+- `source`: 视频文件路径、HTTP 地址，或可被 `ffmpeg` 读取的流地址
+- `baselineImage`: 基准图路径
+- `compareThreshold`: 差异阈值，建议先从 `0.12 ~ 0.20` 试
+- `intervalSeconds`: 检查周期
+- `cooldownSeconds`: 告警冷却时间，避免刷屏
+- `notifier.target`: 企业微信群 `chatid`
+- `notifier.mentionText`: 想在文本里带上的提醒内容，例如 `@张三`
+- `notifier.dryRun`: `true` 时只打印日志，不真正发群
+
+如果你希望企业微信巡检日报里的图片显示为“表内真缩略图”，而不是普通链接，需要额外满足这几个条件：
+
+- `reporting.reportFormat` 使用智能表格模式
+- 服务端能够直连企业微信 `wedoc/smartsheet/*` 接口
+- 图片列写入完整的 `CellImageValue`
+- 容器里要能拿到企业微信应用级 token
+
+推荐在服务器 `.env` 中额外配置：
+
+```bash
+WECOM_UPLOAD_IMAGE_API_URL=https://qyapi.weixin.qq.com/cgi-bin/media/uploadimg
+WECOM_UPLOAD_CORPID=你的企业ID
+WECOM_UPLOAD_SECRET=你的应用Secret
+WECOM_UPLOAD_IMAGE_ACCESS_TOKEN_COMMAND=python3 -c "import json,urllib.request,os;u='https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=%s&corpsecret=%s' % (os.environ['WECOM_UPLOAD_CORPID'], os.environ['WECOM_UPLOAD_SECRET']);print(json.load(urllib.request.urlopen(u))['access_token'])"
+```
+
+验证成功后的智能表记录里，图片列应类似这样：
+
+```json
+[
+  {
+    "id": "scene-id-frame",
+    "title": "某门店巡检图",
+    "image_url": "https://wework.qpic.cn/...",
+    "width": 640,
+    "height": 360
+  }
+]
+```
+
+启动：
+
+```bash
+docker compose --profile watch up -d stream-frame-watch
+```
+
+如果你要先给某条流生成一张基准图，可以直接执行：
+
+```bash
+bash scripts/prepare-stream-watch-baseline.sh "https://你的流地址.m3u8" "/home/node/.openclaw/workspace/stream-watch/custom/baseline.png" 0
+```
+
+查看日志：
+
+```bash
+docker compose logs -f stream-frame-watch
+```
+
+如果你更希望直接复用网关容器里已打通的企微环境，也可以改用：
+
+```bash
+bash scripts/run-stream-watch-once-via-gateway.sh
+```
+
+异常帧默认保存到：
+
+```bash
+/home/node/.openclaw/workspace/reports/stream-watch/
+```
 
 ## 六、验收建议
 

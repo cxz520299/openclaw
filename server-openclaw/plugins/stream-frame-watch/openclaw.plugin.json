@@ -1,0 +1,15 @@
+{
+  "id": "stream-frame-watch",
+  "name": "Stream Frame Watch",
+  "description": "Analyze frames sampled from a video file or stream against a baseline image.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "configPath": {
+        "type": "string",
+        "description": "Path to the stream-frame-watch scenario config JSON."
+      }
+    }
+  }
+}

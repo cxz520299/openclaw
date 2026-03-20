@@ -1,0 +1,15 @@
+{
+  "name": "wecom-doc-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenClaw plugin for the WeCom document MCP endpoint.",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.2"
+  }
+}

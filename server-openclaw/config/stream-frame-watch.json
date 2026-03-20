@@ -1,0 +1,70 @@
+{
+  "defaults": {
+    "defaultSceneId": "public-hls-wecom-sample",
+    "intervalSeconds": 300,
+    "cooldownSeconds": 1800,
+    "compareThreshold": 0.12,
+    "frameWidth": 640,
+    "frameHeight": 360,
+    "randomWindowSeconds": 300,
+    "outputRoot": "/home/node/.openclaw/workspace/reports/stream-watch",
+    "reporting": {
+      "enabled": true,
+      "writeToWecomDoc": true,
+      "reportFormat": "smartsheet",
+      "docTitlePrefix": "巡检记录",
+      "timezone": "Asia/Shanghai",
+      "publicBaseUrl": "https://ai.euzhi.com/reports"
+    }
+  },
+  "jobs": [
+    {
+      "id": "demo-wecom-violation",
+      "name": "免费样例视频违规场景",
+      "storeName": "演示测试门店",
+      "aliases": ["演示测试门店", "测试门店", "demo门店"],
+      "enabled": false,
+      "source": "/home/node/.openclaw/workspace/stream-watch/demo/blue-demo.mp4",
+      "baselineImage": "/home/node/.openclaw/workspace/stream-watch/demo/baseline.png",
+      "framePickMode": "first",
+      "compareThreshold": 0.18,
+      "intervalSeconds": 300,
+      "cooldownSeconds": 1800,
+      "ruleName": "画面内容偏离预设场景",
+      "expectedDescription": "预期画面应接近纯红色许可测试图。",
+      "violationMessage": "当前首帧出现真实道路与车辆画面，与预设许可场景严重不符，判定为违规。",
+      "notifier": {
+        "channel": "wecom",
+        "target": "replace-with-wecom-chatid",
+        "mentionText": "@巡检负责人",
+        "mentionUserIds": ["replace-with-userid"],
+        "dryRun": false
+      }
+    },
+    {
+      "id": "public-hls-wecom-sample",
+      "name": "公网 HLS 样例流企业微信告警",
+      "storeName": "Apple样例门店",
+      "aliases": ["Apple样例门店", "样例门店", "苹果样例门店", "Apple门店"],
+      "enabled": true,
+      "source": "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_4x3/gear1/prog_index.m3u8",
+      "baselineImage": "/home/node/.openclaw/workspace/stream-watch/public-hls-sample/baseline.png",
+      "framePickMode": "random",
+      "minOffsetSeconds": 180,
+      "maxOffsetSeconds": 220,
+      "compareThreshold": 0.08,
+      "intervalSeconds": 900,
+      "cooldownSeconds": 7200,
+      "ruleName": "公网样例流画面偏离基准图",
+      "expectedDescription": "预期画面应与基准图对应的 Apple HLS 样例片段保持近似。",
+      "violationMessage": "随机抽帧与基准图差异过大，可能出现切源、异常片段、卡顿恢复后跳段或播放内容变化。",
+      "notifier": {
+        "channel": "wecom",
+        "target": "replace-with-wecom-chatid",
+        "mentionText": "@巡检负责人",
+        "mentionUserIds": ["replace-with-userid"],
+        "dryRun": false
+      }
+    }
+  ]
+}

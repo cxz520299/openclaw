@@ -1,0 +1,23 @@
+{
+  "id": "wecom-doc-mcp",
+  "name": "WeCom Document MCP",
+  "description": "Connect OpenClaw to the WeCom document MCP endpoint over Streamable HTTP.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "docUrl": {
+        "type": "string",
+        "description": "Streamable HTTP MCP endpoint for WeCom documents."
+      },
+      "wecomConfigPath": {
+        "type": "string",
+        "description": "Path to the config.json written by the official WeCom OpenClaw plugin."
+      },
+      "timeoutMs": {
+        "type": "number",
+        "description": "Timeout hint for WeCom MCP calls."
+      }
+    }
+  }
+}

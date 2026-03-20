@@ -12,6 +12,16 @@ services:
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+      WECOM_BOT_ID: ${WECOM_BOT_ID:-}
+      WECOM_BOT_SECRET: ${WECOM_BOT_SECRET:-}
+      WECOM_PLUGIN_NPM_SPEC: ${WECOM_PLUGIN_NPM_SPEC:-@wecom/wecom-openclaw-plugin@1.0.11}
+      WECOM_DOC_MCP_URL: ${WECOM_DOC_MCP_URL:-}
+      WECOM_UPLOAD_IMAGE_API_URL: ${WECOM_UPLOAD_IMAGE_API_URL:-}
+      WECOM_UPLOAD_IMAGE_ACCESS_TOKEN: ${WECOM_UPLOAD_IMAGE_ACCESS_TOKEN:-}
+      WECOM_UPLOAD_IMAGE_ACCESS_TOKEN_COMMAND: ${WECOM_UPLOAD_IMAGE_ACCESS_TOKEN_COMMAND:-}
+      WECOM_UPLOAD_CORPID: ${WECOM_UPLOAD_CORPID:-}
+      WECOM_UPLOAD_SECRET: ${WECOM_UPLOAD_SECRET:-}
+      FFMPEG_BIN: ${FFMPEG_BIN:-}
     logging:
       driver: json-file
       options:
@@ -21,15 +31,24 @@ services:
       - ${OPENCLAW_DATA_DIR}:/home/node/.openclaw
       - ${OPENCLAW_DATA_DIR}/xhs:/home/node/.xhs-mcp
       - ./openclaw.json:/home/node/.openclaw/openclaw.json:ro
+      - ./config:/opt/openclaw/config:ro
+      - ./scripts:/opt/openclaw/scripts:ro
       - ./plugins/social-mcp:/app/extensions/social-mcp:ro
+      - ./plugins/wecom-doc-mcp:/app/extensions/wecom-doc-mcp:ro
+      - ./plugins/stream-frame-watch:/app/extensions/stream-frame-watch:ro
       - ./okinto-openai-proxy.mjs:/opt/openclaw/okinto-openai-proxy.mjs:ro
       - ./forward-browser-ui.mjs:/opt/openclaw/forward-browser-ui.mjs:ro
+      - ./services/stream-frame-watch:/opt/openclaw/services/stream-frame-watch:ro
       - ./start-openclaw.sh:/opt/openclaw/start-openclaw.sh:ro
     ports:
       - "${OPENCLAW_BIND_IP:-127.0.0.1}:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "${OPENCLAW_BIND_IP:-127.0.0.1}:${OPENCLAW_BRIDGE_PORT:-18790}:18790"
       - "${OPENCLAW_BIND_IP:-127.0.0.1}:${OPENCLAW_BROWSER_PORT:-18791}:18791"
       - "127.0.0.1:18801:18801"
+    networks:
+      default:
+      backplane:
+        ipv4_address: 172.30.0.10
     command: ["sh", "/opt/openclaw/start-openclaw.sh"]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
@@ -51,6 +70,16 @@ services:
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+      WECOM_BOT_ID: ${WECOM_BOT_ID:-}
+      WECOM_BOT_SECRET: ${WECOM_BOT_SECRET:-}
+      WECOM_PLUGIN_NPM_SPEC: ${WECOM_PLUGIN_NPM_SPEC:-@wecom/wecom-openclaw-plugin@1.0.11}
+      WECOM_DOC_MCP_URL: ${WECOM_DOC_MCP_URL:-}
+      WECOM_UPLOAD_IMAGE_API_URL: ${WECOM_UPLOAD_IMAGE_API_URL:-}
+      WECOM_UPLOAD_IMAGE_ACCESS_TOKEN: ${WECOM_UPLOAD_IMAGE_ACCESS_TOKEN:-}
+      WECOM_UPLOAD_IMAGE_ACCESS_TOKEN_COMMAND: ${WECOM_UPLOAD_IMAGE_ACCESS_TOKEN_COMMAND:-}
+      WECOM_UPLOAD_CORPID: ${WECOM_UPLOAD_CORPID:-}
+      WECOM_UPLOAD_SECRET: ${WECOM_UPLOAD_SECRET:-}
+      FFMPEG_BIN: ${FFMPEG_BIN:-}
     logging:
       driver: json-file
       options:
@@ -59,6 +88,9 @@ services:
     volumes:
       - ${OPENCLAW_DATA_DIR}:/home/node/.openclaw
       - ./openclaw.json:/home/node/.openclaw/openclaw.json:ro
+      - ./config:/opt/openclaw/config:ro
+      - ./plugins/stream-frame-watch:/app/extensions/stream-frame-watch:ro
+      - ./services/stream-frame-watch:/opt/openclaw/services/stream-frame-watch:ro
     entrypoint: ["openclaw"]
     depends_on:
       - openclaw-gateway
@@ -85,7 +117,8 @@ services:
     image: caddy:2
     restart: unless-stopped
     depends_on:
-      - openclaw-gateway
+      openclaw-gateway:
+        condition: service_healthy
     logging:
       driver: json-file
       options:
@@ -99,6 +132,10 @@ services:
       - ${OPENCLAW_DATA_DIR}/workspace/reports:/srv/reports:ro
       - caddy_data:/data
       - caddy_config:/config
+    networks:
+      default:
+      backplane:
+        ipv4_address: 172.30.0.20
     ports:
       - "80:80"
       - "443:443"
@@ -170,6 +207,63 @@ services:
       retries: 5
       start_period: 10s
 
+  stream-frame-watch:
+    profiles: ["watch"]
+    image: openclaw-vps:local
+    user: "0:0"
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    depends_on:
+      - openclaw-gateway
+    network_mode: "service:openclaw-gateway"
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+      WECOM_BOT_ID: ${WECOM_BOT_ID:-}
+      WECOM_BOT_SECRET: ${WECOM_BOT_SECRET:-}
+      WECOM_PLUGIN_NPM_SPEC: ${WECOM_PLUGIN_NPM_SPEC:-@wecom/wecom-openclaw-plugin@1.0.11}
+      WECOM_DOC_MCP_URL: ${WECOM_DOC_MCP_URL:-}
+      WECOM_UPLOAD_IMAGE_API_URL: ${WECOM_UPLOAD_IMAGE_API_URL:-}
+      WECOM_UPLOAD_IMAGE_ACCESS_TOKEN: ${WECOM_UPLOAD_IMAGE_ACCESS_TOKEN:-}
+      WECOM_UPLOAD_IMAGE_ACCESS_TOKEN_COMMAND: ${WECOM_UPLOAD_IMAGE_ACCESS_TOKEN_COMMAND:-}
+      WECOM_UPLOAD_CORPID: ${WECOM_UPLOAD_CORPID:-}
+      WECOM_UPLOAD_SECRET: ${WECOM_UPLOAD_SECRET:-}
+      STREAM_FRAME_WATCH_CONFIG: ${STREAM_FRAME_WATCH_CONFIG:-/opt/openclaw/config/stream-frame-watch.json}
+      STREAM_FRAME_WATCH_LOOP_SECONDS: ${STREAM_FRAME_WATCH_LOOP_SECONDS:-15}
+      STREAM_FRAME_WATCH_STATE_DIR: ${STREAM_FRAME_WATCH_STATE_DIR:-/home/node/.openclaw/workspace/stream-watch/state}
+      FFMPEG_BIN: ${FFMPEG_BIN:-}
+    volumes:
+      - ${OPENCLAW_DATA_DIR}:/home/node/.openclaw
+      - ./openclaw.json:/home/node/.openclaw/openclaw.json:ro
+      - ./config:/opt/openclaw/config:ro
+      - ${OPENCLAW_DATA_DIR}/extensions/wecom-openclaw-plugin:/app/extensions/wecom-openclaw-plugin:ro
+      - ./plugins/social-mcp:/app/extensions/social-mcp:ro
+      - ./plugins/wecom-doc-mcp:/app/extensions/wecom-doc-mcp:ro
+      - ./plugins/stream-frame-watch:/app/extensions/stream-frame-watch:ro
+      - ./services/stream-frame-watch:/opt/openclaw/services/stream-frame-watch:ro
+    command:
+      [
+        "sh",
+        "-lc",
+        "if ! command -v ffmpeg >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update >/tmp/openclaw-watch-apt-update.log 2>&1 && apt-get install -y --no-install-recommends ffmpeg >/tmp/openclaw-watch-apt-install.log 2>&1; fi && exec node /opt/openclaw/services/stream-frame-watch/index.mjs daemon --config /opt/openclaw/config/stream-frame-watch.json"
+      ]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   caddy_data:
   caddy_config:
+
+networks:
+  backplane:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

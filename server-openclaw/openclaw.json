@@ -35,6 +35,17 @@
       "timeoutSeconds": 1800
     }
   },
+  "channels": {
+    "wecom": {
+      "enabled": true,
+      "botId": "${WECOM_BOT_ID}",
+      "secret": "${WECOM_BOT_SECRET}",
+      "dmPolicy": "open",
+      "allowFrom": ["*"],
+      "groupPolicy": "open",
+      "sendThinkingMessage": false
+    }
+  },
   "tools": {
     "profile": "full",
     "allow": [
@@ -73,7 +84,12 @@
       "douyin_trending",
       "social_mcp_status",
       "social_mcp_list_tools",
-      "social_mcp_call"
+      "social_mcp_call",
+      "wecom_doc_mcp_status",
+      "wecom_doc_mcp_list_tools",
+      "wecom_doc_mcp_call",
+      "stream_frame_watch_list_scenarios",
+      "stream_frame_watch_analyze"
     ],
     "deny": [],
     "elevated": {
@@ -125,6 +141,11 @@
           "social_mcp_status",
           "social_mcp_list_tools",
           "social_mcp_call",
+          "wecom_doc_mcp_status",
+          "wecom_doc_mcp_list_tools",
+          "wecom_doc_mcp_call",
+          "stream_frame_watch_list_scenarios",
+          "stream_frame_watch_analyze",
           "sessions_list",
           "sessions_history",
           "sessions_send",
@@ -144,7 +165,7 @@
     }
   },
   "plugins": {
-    "allow": ["acpx", "social-mcp"],
+    "allow": ["acpx", "social-mcp", "wecom-openclaw-plugin", "wecom-doc-mcp", "stream-frame-watch"],
     "entries": {
       "acpx": {
         "enabled": true,
@@ -157,6 +178,20 @@
         "config": {
           "weiboUrl": "http://weibo-mcp:4200/mcp",
           "xiaohongshuUrl": "http://xhs-mcp:3100/mcp"
+        }
+      },
+      "wecom-openclaw-plugin": {
+        "enabled": true,
+        "config": {}
+      },
+      "wecom-doc-mcp": {
+        "enabled": true,
+        "config": {}
+      },
+      "stream-frame-watch": {
+        "enabled": true,
+        "config": {
+          "configPath": "/opt/openclaw/config/stream-frame-watch.json"
         }
       }
     }

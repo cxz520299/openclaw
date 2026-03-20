@@ -1,0 +1,12 @@
+{
+  "name": "stream-frame-watch",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OpenClaw plugin for video stream frame comparison.",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}
