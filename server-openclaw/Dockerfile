@@ -54,13 +54,16 @@ LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
   org.opencontainers.image.revision="${OPENCLAW_GIT_REF}" \
   org.opencontainers.image.title="OpenClaw VPS custom build"
 
-RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources
+RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+      sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources; \
+    fi
 
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       tini \
       ca-certificates \
       curl \
+      ffmpeg \
       git \
       hostname \
       imagemagick \
@@ -88,6 +91,7 @@ RUN npm config set registry https://registry.npmmirror.com && \
     npm install -g clawhub @openai/codex xhs-mcp@latest
 
 RUN mkdir -p /opt/openclaw/plugins/social-mcp && \
+    mkdir -p /opt/openclaw/plugins/wecom-doc-mcp && \
     mkdir -p /app/extensions && \
     mkdir -p /usr/local/lib/node_modules/openclaw/extensions/acpx/node_modules && \
     chown -R node:node /app /opt/openclaw /usr/local/lib/node_modules/openclaw/extensions
@@ -106,10 +110,17 @@ COPY plugins/social-mcp/package.json ./package.json
 RUN npm config set registry https://registry.npmmirror.com && \
     npm install --omit=dev
 
+WORKDIR /opt/openclaw/plugins/wecom-doc-mcp
+COPY plugins/wecom-doc-mcp/package.json ./package.json
+RUN npm config set registry https://registry.npmmirror.com && \
+    npm install --omit=dev
+
 WORKDIR /opt/openclaw
 COPY plugins/social-mcp /opt/openclaw/plugins/social-mcp
+COPY plugins/wecom-doc-mcp /opt/openclaw/plugins/wecom-doc-mcp
 COPY social-sources /opt/openclaw/social-sources
 RUN ln -sfn /opt/openclaw/plugins/social-mcp /app/extensions/social-mcp
+RUN ln -sfn /opt/openclaw/plugins/wecom-doc-mcp /app/extensions/wecom-doc-mcp
 
 ENV HOME=/home/node \
     TERM=xterm-256color \

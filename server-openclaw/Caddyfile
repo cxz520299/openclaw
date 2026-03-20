@@ -3,6 +3,12 @@ ai.euzhi.com {
 
   root * /srv
 
+  @wecom_verify path /WW_verify_ak3J1DHgIiEsYLOh.txt
+  handle @wecom_verify {
+    root * /srv/reports
+    file_server
+  }
+
   handle /reports/* {
     root * /srv/reports
     uri strip_prefix /reports
@@ -13,18 +19,22 @@ ai.euzhi.com {
     reverse_proxy qq-bot-bridge:3400
   }
 
+  handle /feishu/* {
+    respond "not_found" 404
+  }
+
   handle /app/avatar/* {
     uri strip_prefix /app
-    reverse_proxy openclaw-gateway:18789
+    reverse_proxy 172.30.0.10:18789
   }
 
   handle /app/__openclaw__/* {
     uri strip_prefix /app
-    reverse_proxy openclaw-gateway:18789
+    reverse_proxy 172.30.0.10:18789
   }
 
   handle /ws* {
-    reverse_proxy openclaw-gateway:18789 {
+    reverse_proxy 172.30.0.10:18789 {
       header_up Host {host}
       header_up X-Forwarded-Host {host}
       header_up X-Forwarded-Proto {scheme}

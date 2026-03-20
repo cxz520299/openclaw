@@ -1671,7 +1671,7 @@ function register(api) {
         }
       }
     },
-    execute: async ({ platform = "all" }) => {
+    execute: async (_toolCallId, { platform = "all" } = {}) => {
       const platforms = platform === "all" ? ["bilibili", "weibo", "xiaohongshu", "douyin"] : [platform];
       const rows = [];
 
@@ -1698,7 +1698,7 @@ function register(api) {
       },
       required: ["platform"]
     },
-    execute: async (payload = {}) => {
+    execute: async (_toolCallId, payload = {}) => {
       const platform = payload?.platform;
       const tool = payload?.tool;
       const args =
@@ -1754,7 +1754,7 @@ function register(api) {
       },
       required: ["tool"]
     },
-    execute: async (payload) => {
+    execute: async (_toolCallId, payload = {}) => {
       const platform = payload?.platform;
       const fallbackPlatform =
         typeof platform === "string" && platform
@@ -1818,7 +1818,7 @@ function register(api) {
         }
       }
     },
-    execute: async (payload) => {
+    execute: async (_toolCallId, payload = {}) => {
       const platform = payload?.platform;
       const fallbackPlatform =
         typeof platform === "string" && platform
@@ -1872,7 +1872,7 @@ function register(api) {
       },
       required: ["input_path", "outdir"]
     },
-    execute: async ({ input_path: inputPath, outdir }) => {
+    execute: async (_toolCallId, { input_path: inputPath, outdir } = {}) => {
       await runReportScript(inputPath, outdir);
       await refreshReportsDashboard();
       return stringify({
@@ -1911,7 +1911,10 @@ function register(api) {
         }
       }
     },
-    execute: async ({ keyword = "AI", platforms = ["xiaohongshu", "bilibili", "weibo"] }) => {
+    execute: async (
+      _toolCallId,
+      { keyword = "AI", platforms = ["xiaohongshu", "bilibili", "weibo"] } = {},
+    ) => {
       const date = dateStamp();
       const rawDir = path.join(WORKSPACE_ROOT, "reports/raw/daily-hot", date);
       const summaryPath = path.join(WORKSPACE_ROOT, "reports/summary", `${date}-daily-hot.md`);
@@ -2020,7 +2023,7 @@ function register(api) {
         }
       }
     },
-    execute: async (payload = {}) => {
+    execute: async (_toolCallId, payload = {}) => {
       const tool = payload?.tool || inferToolFromPayload("xiaohongshu", payload);
       if (!tool) {
         throw new Error("Tool is required. You can also use action=status|login|search|discover|detail.");
@@ -2102,7 +2105,7 @@ function register(api) {
       },
       required: ["keyword"]
     },
-    execute: async (payload = {}) => {
+    execute: async (_toolCallId, payload = {}) => {
       const keyword = readStringArg(payload, "keyword");
       const result = await callToolForPlatform(
         state,
@@ -2226,7 +2229,7 @@ function register(api) {
         }
       }
     },
-    execute: async (payload = {}) => {
+    execute: async (_toolCallId, payload = {}) => {
       const tool =
         payload?.tool ||
         inferToolFromPayload("weibo", payload) ||
@@ -2308,7 +2311,7 @@ function register(api) {
       },
       required: ["keyword"]
     },
-    execute: async (payload = {}) => {
+    execute: async (_toolCallId, payload = {}) => {
       const keyword = readStringArg(payload, "keyword");
       const result = await callToolForPlatform(
         state,
@@ -2366,7 +2369,7 @@ function register(api) {
         }
       }
     },
-    execute: async (payload = {}) => {
+    execute: async (_toolCallId, payload = {}) => {
       const tool =
         payload?.tool ||
         inferToolFromPayload("bilibili", payload) ||
@@ -2427,7 +2430,7 @@ function register(api) {
       },
       required: ["keyword"]
     },
-    execute: async (payload = {}) => {
+    execute: async (_toolCallId, payload = {}) => {
       const keyword = readStringArg(payload, "keyword");
       const result = await callToolForPlatform(
         state,
@@ -2479,7 +2482,7 @@ function register(api) {
         }
       }
     },
-    execute: async (payload = {}) => {
+    execute: async (_toolCallId, payload = {}) => {
       const tool = payload?.tool || inferToolFromPayload("douyin", payload);
       if (!tool) {
         throw new Error("Tool is required. You can also use action=search|discover|detail.");
@@ -2540,7 +2543,7 @@ function register(api) {
       },
       required: ["keyword"]
     },
-    execute: async (payload = {}) => {
+    execute: async (_toolCallId, payload = {}) => {
       const keyword = readStringArg(payload, "keyword");
       const result = await callFirstWorkingTool(
         state,
