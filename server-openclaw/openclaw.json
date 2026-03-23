@@ -166,6 +166,13 @@
   },
   "plugins": {
     "allow": ["acpx", "social-mcp", "wecom-openclaw-plugin", "wecom-doc-mcp", "stream-frame-watch"],
+    "load": {
+      "paths": [
+        "/opt/openclaw/plugins/social-mcp",
+        "/opt/openclaw/plugins/wecom-doc-mcp",
+        "/opt/openclaw/plugins/stream-frame-watch"
+      ]
+    },
     "entries": {
       "acpx": {
         "enabled": true,

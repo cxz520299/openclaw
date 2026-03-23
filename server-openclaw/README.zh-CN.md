@@ -426,6 +426,42 @@ curl -I https://ai.euzhi.com/app/assets/index-CenotFkT.js
 
 ## 八、日常运维命令
 
+### 一键对齐本地代码到服务器
+
+推荐直接在本地项目目录执行：
+
+```bash
+cd server-openclaw
+bash scripts/sync-server-code.sh
+```
+
+如果想先看差异，不真正覆盖服务器：
+
+```bash
+cd server-openclaw
+bash scripts/sync-server-code.sh dry-run
+```
+
+这个脚本会自动做这些事：
+
+- 用 `rsync --checksum` 把本地代码同步到 `/opt/openclaw`
+- 保留服务器运行态内容，不覆盖 `.env`、`.env.*`、`data/`、`config/stream-frame-watch.json`
+- 不同步本地 `node_modules/`
+- 自动修正 `plugins/` 目录属主为 `root:root`
+- 自动为 `social-mcp`、`wecom-doc-mcp` 补装生产依赖
+- 自动重建 `openclaw-gateway`
+- 自动等待网关恢复到 `healthy`
+
+默认目标服务器：
+
+- `root@8.147.63.36:/opt/openclaw`
+
+如需换服务器，可临时覆盖：
+
+```bash
+REMOTE_HOST=你的服务器IP REMOTE_DIR=/opt/openclaw bash scripts/sync-server-code.sh
+```
+
 ### 查看容器状态
 
 ```bash

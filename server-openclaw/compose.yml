@@ -33,9 +33,9 @@ services:
       - ./openclaw.json:/home/node/.openclaw/openclaw.json:ro
       - ./config:/opt/openclaw/config:ro
       - ./scripts:/opt/openclaw/scripts:ro
-      - ./plugins/social-mcp:/app/extensions/social-mcp:ro
-      - ./plugins/wecom-doc-mcp:/app/extensions/wecom-doc-mcp:ro
-      - ./plugins/stream-frame-watch:/app/extensions/stream-frame-watch:ro
+      - ./plugins/social-mcp:/opt/openclaw/plugins/social-mcp:ro
+      - ./plugins/wecom-doc-mcp:/opt/openclaw/plugins/wecom-doc-mcp:ro
+      - ./plugins/stream-frame-watch:/opt/openclaw/plugins/stream-frame-watch:ro
       - ./okinto-openai-proxy.mjs:/opt/openclaw/okinto-openai-proxy.mjs:ro
       - ./forward-browser-ui.mjs:/opt/openclaw/forward-browser-ui.mjs:ro
       - ./services/stream-frame-watch:/opt/openclaw/services/stream-frame-watch:ro
@@ -89,7 +89,7 @@ services:
       - ${OPENCLAW_DATA_DIR}:/home/node/.openclaw
       - ./openclaw.json:/home/node/.openclaw/openclaw.json:ro
       - ./config:/opt/openclaw/config:ro
-      - ./plugins/stream-frame-watch:/app/extensions/stream-frame-watch:ro
+      - ./plugins/stream-frame-watch:/opt/openclaw/plugins/stream-frame-watch:ro
       - ./services/stream-frame-watch:/opt/openclaw/services/stream-frame-watch:ro
     entrypoint: ["openclaw"]
     depends_on:
@@ -241,9 +241,9 @@ services:
       - ./openclaw.json:/home/node/.openclaw/openclaw.json:ro
       - ./config:/opt/openclaw/config:ro
       - ${OPENCLAW_DATA_DIR}/extensions/wecom-openclaw-plugin:/app/extensions/wecom-openclaw-plugin:ro
-      - ./plugins/social-mcp:/app/extensions/social-mcp:ro
-      - ./plugins/wecom-doc-mcp:/app/extensions/wecom-doc-mcp:ro
-      - ./plugins/stream-frame-watch:/app/extensions/stream-frame-watch:ro
+      - ./plugins/social-mcp:/opt/openclaw/plugins/social-mcp:ro
+      - ./plugins/wecom-doc-mcp:/opt/openclaw/plugins/wecom-doc-mcp:ro
+      - ./plugins/stream-frame-watch:/opt/openclaw/plugins/stream-frame-watch:ro
       - ./services/stream-frame-watch:/opt/openclaw/services/stream-frame-watch:ro
     command:
       [
