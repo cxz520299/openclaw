@@ -2,6 +2,7 @@ import http from "./http";
 import type {
   BindingItem,
   JobItem,
+  MatchLogItem,
   Plan,
   PlanItem,
   ResultItem,
@@ -44,6 +45,10 @@ export const inspectionApi = {
 
   getJobs: () => http.get<never, { code: number; message: string; data: JobItem[] }>("/inspection-jobs"),
   getResult: (id: number) => http.get<never, { code: number; message: string; data: ResultItem }>(`/inspection-results/${id}`),
+  getMatchLogs: (params?: { query?: string; jobId?: number; limit?: number }) =>
+    http.get<never, { code: number; message: string; data: MatchLogItem[] }>("/inspection-match-logs", {
+      params,
+    }),
 
   getSchedules: () => http.get<never, { code: number; message: string; data: ScheduleItem[] }>("/schedules"),
   createSchedule: (payload: Partial<ScheduleItem>) => http.post("/schedules", payload),

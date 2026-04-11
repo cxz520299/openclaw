@@ -1,5 +1,14 @@
 <template>
   <div class="page-grid">
+    <el-alert
+      type="info"
+      show-icon
+      :closable="false"
+      title="计划命中规则"
+      description="计划名、计划别名和触发关键词都会参与命中。建议把业务常说的话术一起配进去，例如“实时检查计划、营业画面点检、计划二”，并保持一条计划只对应一种明确巡检意图。"
+      class="plan-alert"
+    />
+
     <el-card shadow="never">
       <template #header>
         <div class="card-header">
@@ -274,6 +283,10 @@ onMounted(() => {
   display: grid;
   gap: 16px;
   grid-template-columns: 1.2fr 1fr;
+}
+
+.plan-alert {
+  grid-column: 1 / -1;
 }
 
 .card-header {

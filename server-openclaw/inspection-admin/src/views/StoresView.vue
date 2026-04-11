@@ -18,6 +18,15 @@
       </article>
     </section>
 
+    <el-alert
+      type="info"
+      show-icon
+      :closable="false"
+      title="门店命中规则"
+      description="企业微信里建议统一说“@小智 执行巡检计划 + 门店名 + 巡检计划名”。门店别名建议补充业务俗称、历史名称和区域简称，避免业务口径和后台名称不一致。"
+      class="panel-card"
+    />
+
     <el-card shadow="never" class="panel-card">
       <template #header>
         <div class="section-heading">
