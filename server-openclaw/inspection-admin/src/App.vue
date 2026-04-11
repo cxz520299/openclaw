@@ -29,6 +29,9 @@
         <el-menu-item index="/jobs">
           <span>执行记录</span>
         </el-menu-item>
+        <el-menu-item index="/match-logs">
+          <span>命中日志</span>
+        </el-menu-item>
       </el-menu>
 
       <div class="aside-footer">

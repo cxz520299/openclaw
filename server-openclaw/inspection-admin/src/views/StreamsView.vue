@@ -1,5 +1,14 @@
 <template>
   <div class="inspection-page">
+    <el-alert
+      type="info"
+      show-icon
+      :closable="false"
+      title="监控模块命中规则"
+      description="同一门店可配置多个监控模块。模块名称建议按业务位置命名，点位别名补充‘门头、收银台、仓库、后场’等口语化叫法，后续命中日志会直接展示命中到哪个监控模块。"
+      class="panel-card"
+    />
+
     <el-card shadow="never" class="panel-card">
       <template #header>
         <div class="section-heading">

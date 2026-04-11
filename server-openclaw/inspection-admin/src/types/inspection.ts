@@ -87,12 +87,40 @@ export interface BindingItem {
   storeId: number;
   planId: number;
   streamId: number;
+  priority: number;
   customMatchThresholdPercent: number;
   customDifferenceThresholdPercent: number;
   enabled: boolean;
   store?: StoreItem;
   plan?: Plan;
   stream?: StreamItem;
+}
+
+export interface MatchLogItem {
+  id: number;
+  jobId?: number | null;
+  queryText: string;
+  normalizedQuery: string;
+  requestedStoreName: string;
+  requestedPlanName: string;
+  requestedStreamName: string;
+  requestedSource: string;
+  matchedStoreId: number;
+  matchedStoreName: string;
+  matchedPlanId: number;
+  matchedPlanName: string;
+  matchedStreamId: number;
+  matchedStreamName: string;
+  matchedBindingId: number;
+  storeMatchMode: string;
+  planMatchMode: string;
+  streamMatchMode: string;
+  bindingMatchMode: string;
+  confidenceScore: number;
+  configVersion: string;
+  decisionSummary: string;
+  errorMessage: string;
+  createdAt: string;
 }
 
 export interface JobItem {

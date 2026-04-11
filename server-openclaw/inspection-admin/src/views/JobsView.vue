@@ -69,6 +69,28 @@
           <el-table-column prop="evidence" label="业务说明" min-width="260" />
         </el-table>
 
+        <el-divider>命中说明</el-divider>
+        <el-table v-if="matchLogs.length" :data="matchLogs" border>
+          <el-table-column prop="queryText" label="原始命令" min-width="220" show-overflow-tooltip />
+          <el-table-column label="命中方式" min-width="210">
+            <template #default="{ row }">
+              <div>{{ formatMatchMode(row.storeMatchMode) }}</div>
+              <div class="table-helper">
+                {{ formatMatchMode(row.planMatchMode) }} / {{ formatMatchMode(row.streamMatchMode) }}
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="命中结果" min-width="220">
+            <template #default="{ row }">
+              <div>{{ row.matchedStoreName || "-" }}</div>
+              <div class="table-helper">{{ row.matchedPlanName || "-" }} / {{ row.matchedStreamName || "-" }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column prop="confidenceScore" label="置信度" width="100" />
+          <el-table-column prop="decisionSummary" label="命中说明" min-width="260" show-overflow-tooltip />
+        </el-table>
+        <div v-else class="overview-empty compact">当前任务还没有命中日志，可能是旧任务或未写回。</div>
+
         <el-divider>巡检产物</el-divider>
         <el-table :data="resultDetail.artifacts || []" border>
           <el-table-column label="类型" width="140">
@@ -86,7 +108,7 @@
 import { computed, onMounted, ref } from "vue";
 import { inspectionApi } from "@/api/inspection";
 import { useAppStore } from "@/stores/app";
-import type { JobItem, ResultItem } from "@/types/inspection";
+import type { JobItem, MatchLogItem, ResultItem } from "@/types/inspection";
 import {
   buildResultChecklist,
   formatArtifactType,
@@ -94,6 +116,7 @@ import {
   formatFramePickMode,
   formatInspectionType,
   formatJobStatus,
+  formatMatchMode,
   formatPercent,
   formatResultVerdict,
   formatTriggerType,
@@ -105,6 +128,7 @@ const loading = ref(false);
 const jobs = ref<JobItem[]>([]);
 const drawerVisible = ref(false);
 const resultDetail = ref<ResultItem | null>(null);
+const matchLogs = ref<MatchLogItem[]>([]);
 
 const checklistRows = computed(() => buildResultChecklist(resultDetail.value));
 
@@ -132,8 +156,16 @@ async function loadData() {
 }
 
 async function openResult(id: number) {
+  matchLogs.value = [];
   const response = await inspectionApi.getResult(id);
   resultDetail.value = response.data;
+  const jobId = response.data?.jobId;
+  if (jobId) {
+    const matchResponse = await inspectionApi.getMatchLogs({ jobId, limit: 20 });
+    matchLogs.value = matchResponse.data;
+  } else {
+    matchLogs.value = [];
+  }
   drawerVisible.value = true;
 }
 
