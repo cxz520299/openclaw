@@ -5,3 +5,6 @@ server-openclaw/.env
 server-openclaw/.env.bak-*
 server-openclaw/data/
 server-openclaw/.DS_Store
+server-openclaw/inspection-admin/node_modules/
+server-openclaw/inspection-admin/dist/
+server-openclaw/inspection-api/data/

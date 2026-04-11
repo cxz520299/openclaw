@@ -1,4 +1,4 @@
-ARG OPENCLAW_GIT_REF=61d171a
+ARG OPENCLAW_GIT_REF=v2026.4.8
 
 FROM node:24-bookworm AS build
 
@@ -29,7 +29,7 @@ RUN curl --retry 5 --retry-all-errors --retry-delay 2 -fsSL \
 WORKDIR /src/openclaw
 
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
-    NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile
+    NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile --ignore-scripts
 
 RUN pnpm canvas:a2ui:bundle || \
     (echo "A2UI bundle: creating stub (non-fatal)" && \

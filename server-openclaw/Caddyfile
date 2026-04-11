@@ -19,6 +19,14 @@ ai.euzhi.com {
     reverse_proxy qq-bot-bridge:3400
   }
 
+  handle_path /inspection-api/* {
+    reverse_proxy inspection-api:8080
+  }
+
+  handle_path /inspection-admin/* {
+    reverse_proxy inspection-admin:8080
+  }
+
   handle /feishu/* {
     respond "not_found" 404
   }

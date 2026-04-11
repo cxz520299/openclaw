@@ -73,6 +73,14 @@ function register(api) {
           type: "string",
           description: "Video file path or stream URL."
         },
+        storeName: {
+          type: "string",
+          description: "Optional store name to resolve stream and thresholds from the inspection database."
+        },
+        planName: {
+          type: "string",
+          description: "Optional inspection plan name to resolve rules from the inspection database."
+        },
         baselineImage: {
           type: "string",
           description: "Baseline image path or URL."
@@ -129,6 +137,8 @@ function register(api) {
       const args = ["analyze", "--config", getConfigPath(api)];
       appendArg(args, "--scene", payload.sceneId);
       appendArg(args, "--source", payload.source);
+      appendArg(args, "--store-name", payload.storeName);
+      appendArg(args, "--plan-name", payload.planName);
       appendArg(args, "--baseline", payload.baselineImage);
       appendArg(args, "--description-text", payload.descriptionText);
       appendArg(args, "--threshold", payload.compareThreshold);

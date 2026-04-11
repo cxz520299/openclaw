@@ -30,7 +30,7 @@
         "primary": "okinto/gpt-5.4",
         "fallbacks": []
       },
-      "thinkingDefault": "high",
+      "thinkingDefault": "medium",
       "verboseDefault": "off",
       "timeoutSeconds": 1800
     }
@@ -43,7 +43,7 @@
       "dmPolicy": "open",
       "allowFrom": ["*"],
       "groupPolicy": "open",
-      "sendThinkingMessage": false
+      "sendThinkingMessage": true
     }
   },
   "tools": {
@@ -85,6 +85,7 @@
       "social_mcp_status",
       "social_mcp_list_tools",
       "social_mcp_call",
+      "wecom_doc_quick_report",
       "wecom_doc_mcp_status",
       "wecom_doc_mcp_list_tools",
       "wecom_doc_mcp_call",
@@ -141,6 +142,7 @@
           "social_mcp_status",
           "social_mcp_list_tools",
           "social_mcp_call",
+          "wecom_doc_quick_report",
           "wecom_doc_mcp_status",
           "wecom_doc_mcp_list_tools",
           "wecom_doc_mcp_call",

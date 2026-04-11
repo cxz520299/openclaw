@@ -207,6 +207,21 @@ docker compose logs -f openclaw-gateway | grep -i wecom
 - `Authentication successful`
 - `MCP config fetched`
 
+当前企业微信对话体验建议：
+
+- `channels.wecom.sendThinkingMessage = true`
+- `agents.defaults.thinkingDefault = medium`
+
+这样可以做到：
+
+- 用户发消息后，企业微信先看到一条“正在处理/思考中”的占位反馈
+- 长回答或需要调工具时，不会出现“长时间完全没动静”的体感
+- 相比 `thinkingDefault = high`，普通问答首条正式回复会更快
+
+多人协作调试时，如果你遇到“只有机器人创建者能 `@` 通，其他人不回复，但又想保留企业微信文档写入能力”，请直接看这篇排障文档：
+
+- [企业微信多人可 @ 机器人且可写文档的调试说明](/Users/chengxinzhi/Documents/code/openclaw/server-openclaw/docs/wecom-shared-mention-doc-guide.zh-CN.md)
+
 ### 2. 图表与报表
 
 网关镜像内已补齐：
@@ -273,6 +288,7 @@ server-openclaw/config/stream-frame-watch.json
 如果你希望企业微信巡检日报里的图片显示为“表内真缩略图”，而不是普通链接，需要额外满足这几个条件：
 
 - `reporting.reportFormat` 使用智能表格模式
+- `reporting.reportTransport` 建议使用 `direct`
 - 服务端能够直连企业微信 `wedoc/smartsheet/*` 接口
 - 图片列写入完整的 `CellImageValue`
 - 容器里要能拿到企业微信应用级 token
@@ -283,8 +299,17 @@ server-openclaw/config/stream-frame-watch.json
 WECOM_UPLOAD_IMAGE_API_URL=https://qyapi.weixin.qq.com/cgi-bin/media/uploadimg
 WECOM_UPLOAD_CORPID=你的企业ID
 WECOM_UPLOAD_SECRET=你的应用Secret
-WECOM_UPLOAD_IMAGE_ACCESS_TOKEN_COMMAND=python3 -c "import json,urllib.request,os;u='https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=%s&corpsecret=%s' % (os.environ['WECOM_UPLOAD_CORPID'], os.environ['WECOM_UPLOAD_SECRET']);print(json.load(urllib.request.urlopen(u))['access_token'])"
 ```
+
+说明：
+
+- 现在巡检写企业微信表格支持“服务端直连企业应用”模式
+- 只要配置了 `WECOM_UPLOAD_CORPID` 和 `WECOM_UPLOAD_SECRET`，服务端会自动换取 access token
+- `WECOM_UPLOAD_IMAGE_ACCESS_TOKEN_COMMAND` 仍可保留，但不再是必填
+- 这条链路不依赖企业微信聊天机器人的“文档用户授权”
+- 如果你希望群里所有人都能 `@` 机器人，同时后台还能写巡检表格，建议把聊天机器人上的“文档/消息/日程/待办”等用户授权关掉，只保留轻权限聊天；文档写入交给服务端直连企业应用
+- 更完整的多人调试与排障步骤见：
+  [企业微信多人可 @ 机器人且可写文档的调试说明](/Users/chengxinzhi/Documents/code/openclaw/server-openclaw/docs/wecom-shared-mention-doc-guide.zh-CN.md)
 
 验证成功后的智能表记录里，图片列应类似这样：
 

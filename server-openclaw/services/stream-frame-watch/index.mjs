@@ -36,9 +36,18 @@ const DEFAULT_REPORT_PUBLIC_BASE_URL =
 const DEFAULT_WECOM_DOC_TIMEOUT_MS = 20000;
 const DEFAULT_WECOM_UPLOAD_IMAGE_API_URL =
   process.env.WECOM_UPLOAD_IMAGE_API_URL || "https://qyapi.weixin.qq.com/cgi-bin/media/uploadimg";
+const DEFAULT_WECOM_ACCESS_TOKEN_API_URL =
+  process.env.WECOM_UPLOAD_ACCESS_TOKEN_API_URL || "https://qyapi.weixin.qq.com/cgi-bin/gettoken";
+const DEFAULT_INSPECTION_API_BASE_URL =
+  process.env.INSPECTION_API_BASE_URL || "http://inspection-api:8080/api";
 
 let cachedFfmpegBinary = "";
 let cachedWecomDocSdk = null;
+let cachedWecomAccessToken = {
+  cacheKey: "",
+  token: "",
+  expiresAtMs: 0,
+};
 
 function usage() {
   console.log(`Usage:
@@ -73,6 +82,14 @@ function parseArgs(argv) {
     }
     if (token === "--source") {
       options.source = args.shift() || "";
+      continue;
+    }
+    if (token === "--store-name") {
+      options.storeName = args.shift() || "";
+      continue;
+    }
+    if (token === "--plan-name") {
+      options.planName = args.shift() || "";
       continue;
     }
     if (token === "--baseline") {
@@ -156,10 +173,10 @@ function parseArgs(argv) {
 function log(jobId, message, extra = null) {
   const prefix = jobId ? `[stream-watch:${jobId}]` : "[stream-watch]";
   if (extra == null) {
-    console.log(`${prefix} ${message}`);
+    console.error(`${prefix} ${message}`);
     return;
   }
-  console.log(`${prefix} ${message}`, extra);
+  console.error(`${prefix} ${message}`, extra);
 }
 
 async function readJson(filePath, fallback) {
@@ -216,6 +233,23 @@ function normalizeLookupToken(value) {
     .trim()
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function canonicalizeSourceLocator(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+  try {
+    const parsed = new URL(raw);
+    parsed.hash = "";
+    const normalizedPath = parsed.pathname.replace(/\/+/g, "/").replace(/\/$/u, "");
+    parsed.pathname = normalizedPath || "/";
+    parsed.searchParams.sort();
+    return parsed.toString().replace(/\/$/u, "");
+  } catch {
+    return raw.replace(/\s+/gu, "").replace(/\/+/g, "/").replace(/\/$/u, "");
+  }
 }
 
 function dedupeStrings(values) {
@@ -309,10 +343,12 @@ function normalizeReportingConfig(reporting, defaultsReporting) {
     ...(defaultsReporting && typeof defaultsReporting === "object" ? defaultsReporting : {}),
     ...(reporting && typeof reporting === "object" ? reporting : {}),
   };
+  const reportTransport = String(merged.reportTransport || "auto").trim().toLowerCase();
   return {
     enabled: Boolean(merged.enabled),
     writeToWecomDoc: pickDefined(merged.writeToWecomDoc, true) !== false,
     reportFormat: String(merged.reportFormat || "smartsheet").trim() === "document" ? "document" : "smartsheet",
+    reportTransport: reportTransport === "direct" || reportTransport === "mcp" ? reportTransport : "auto",
     docTitlePrefix: String(merged.docTitlePrefix || DEFAULT_REPORT_DOC_TITLE_PREFIX).trim() || DEFAULT_REPORT_DOC_TITLE_PREFIX,
     timezone: String(merged.timezone || DEFAULT_REPORT_TIMEZONE).trim() || DEFAULT_REPORT_TIMEZONE,
     publicBaseUrl: String(merged.publicBaseUrl || DEFAULT_REPORT_PUBLIC_BASE_URL).trim() || DEFAULT_REPORT_PUBLIC_BASE_URL,
@@ -333,6 +369,11 @@ function normalizeReportingConfig(reporting, defaultsReporting) {
     ).trim(),
     uploadImageAccessTokenCommand: String(
       merged.uploadImageAccessTokenCommand || process.env.WECOM_UPLOAD_IMAGE_ACCESS_TOKEN_COMMAND || "",
+    ).trim(),
+    uploadCorpid: String(merged.uploadCorpid || process.env.WECOM_UPLOAD_CORPID || "").trim(),
+    uploadSecret: String(merged.uploadSecret || process.env.WECOM_UPLOAD_SECRET || "").trim(),
+    uploadAccessTokenApiUrl: String(
+      merged.uploadAccessTokenApiUrl || process.env.WECOM_UPLOAD_ACCESS_TOKEN_API_URL || DEFAULT_WECOM_ACCESS_TOKEN_API_URL,
     ).trim(),
   };
 }
@@ -884,7 +925,7 @@ function normalizeDescriptionChecklist(text) {
     }
   }
 
-  return checklist.slice(0, 12);
+  return checklist;
 }
 
 function splitDescriptionChecklist(text) {
@@ -1184,10 +1225,13 @@ function normalizeJob(job, defaults) {
   const notifier = job.notifier && typeof job.notifier === "object" ? job.notifier : {};
   const framePickMode = String(job.framePickMode || defaults.framePickMode || "random").trim();
   const storeName = String(job.storeName || job.name || job.id || "").trim();
+  const monitorName = String(job.monitorName || job.streamName || "").trim();
   const aliases = dedupeStrings([
     ...toArray(job.aliases),
     ...toArray(job.storeAliases),
+    ...toArray(job.sourceAliases),
     storeName,
+    monitorName,
     String(job.name || "").trim(),
     String(job.id || "").trim(),
   ]);
@@ -1195,6 +1239,7 @@ function normalizeJob(job, defaults) {
     id: String(job.id || "").trim(),
     name: String(job.name || job.id || "").trim(),
     storeName,
+    monitorName,
     aliases,
     enabled: Boolean(job.enabled),
     source: String(job.source || "").trim(),
@@ -1229,6 +1274,230 @@ async function fileExists(filePath) {
     }
     throw error;
   }
+}
+
+function normalizeInspectionApiBaseUrl(rawUrl) {
+  const value = String(rawUrl || DEFAULT_INSPECTION_API_BASE_URL).trim().replace(/\/+$/u, "");
+  if (!value) {
+    return DEFAULT_INSPECTION_API_BASE_URL;
+  }
+  return /\/api$/u.test(value) ? value : `${value}/api`;
+}
+
+function isPlaceholderValue(value) {
+  const text = String(value || "").trim();
+  return !text || /replace-with-/u.test(text);
+}
+
+async function postJson(url, payload) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message =
+      String(body?.message || body?.error || "").trim() ||
+      `${response.status} ${response.statusText}`.trim();
+    throw new Error(message);
+  }
+  if (body && typeof body === "object" && Number(body.code || 0) !== 0) {
+    throw new Error(String(body.message || "API returned non-zero code").trim());
+  }
+  return body;
+}
+
+function formatPlanItemText(item) {
+  const itemType = String(item?.itemType || "").trim();
+  const content = cleanupClauseText(item?.content || "");
+  if (!content) {
+    return "";
+  }
+  if (itemType === "scene_expectation") {
+    return content.startsWith("画面") || content.startsWith("场景") ? content : `画面应为${content}`;
+  }
+  if (itemType === "must_have") {
+    return /^(?:必须有|需要有|需有|应有|必须包含|需要包含|需包含|应包含)/u.test(content)
+      ? content
+      : `必须有${content}`;
+  }
+  if (itemType === "must_not_have") {
+    return /^(?:不是|不得出现|禁止出现|不能出现|不可出现|不得有|禁止有|不能有|不可有)/u.test(content)
+      ? content
+      : `不得出现${content}`;
+  }
+  return content;
+}
+
+function buildDescriptionTextFromPlanItems(items) {
+  return (Array.isArray(items) ? items : [])
+    .map((item) => formatPlanItemText(item))
+    .filter(Boolean)
+    .join("；");
+}
+
+function buildInspectionApiJob(config, execution) {
+  const data = execution?.data || execution || {};
+  const jobInfo = data.job || {};
+  const store = data.store || {};
+  const plan = data.plan || {};
+  const stream = data.stream || {};
+  const items = Array.isArray(data.items) ? data.items : [];
+  const alertRule = data.alertRule || {};
+  const defaults = config?.defaults || {};
+  const isDescriptionPlan =
+    String(plan.planType || "").trim() === "description_inspection" ||
+    (!stream.baselineImagePath && !stream.baselineImageUrl && items.length > 0);
+  const descriptionText = isDescriptionPlan ? buildDescriptionTextFromPlanItems(items) : "";
+  const compareThreshold =
+    Number.isFinite(Number(plan.differenceThresholdPercent)) && Number(plan.differenceThresholdPercent) > 0
+      ? Number(plan.differenceThresholdPercent) / 100
+      : undefined;
+  const matchThresholdPercent =
+    Number.isFinite(Number(plan.matchThresholdPercent)) && Number(plan.matchThresholdPercent) > 0
+      ? Number(plan.matchThresholdPercent)
+      : undefined;
+
+  return {
+    apiJobId: Number(jobInfo.id || 0),
+    apiPlanId: Number(plan.id || 0),
+    apiStoreId: Number(store.id || 0),
+    raw: data,
+    job: normalizeJob(
+      {
+        id: `inspection-job-${jobInfo.id || `${store.id || "store"}-${plan.id || "plan"}`}`,
+        name: String(plan.name || jobInfo.jobNo || "数据库巡检计划").trim(),
+        storeName: String(store.name || plan.name || "未命名门店").trim(),
+        monitorName: String(stream.name || stream.sourceAlias || stream.streamUrl || "").trim(),
+        aliases: [store.name, plan.name, jobInfo.jobNo].filter(Boolean),
+        enabled: true,
+        source: String(stream.streamUrl || stream.sourceAlias || "").trim(),
+        baselineImage: String(stream.baselineImagePath || stream.baselineImageUrl || "").trim(),
+        descriptionText,
+        compareThreshold,
+        matchThresholdPercent,
+        framePickMode: String(plan.framePickMode || defaults.framePickMode || "first").trim(),
+        ruleName: String(plan.name || "数据库巡检计划").trim(),
+        expectedDescription: String(plan.description || "").trim(),
+        violationMessage: `${String(store.name || "该门店").trim()} ${String(plan.name || "巡检计划").trim()} 未通过`,
+        notifier:
+          !isPlaceholderValue(alertRule?.targetId) && String(alertRule?.channelType || "").trim() === "wecom"
+            ? {
+                channel: "wecom",
+                target: String(alertRule.targetId || "").trim(),
+                mentionText: !isPlaceholderValue(alertRule?.mentionUserId) ? "@巡检负责人" : "",
+                mentionUserIds: !isPlaceholderValue(alertRule?.mentionUserId)
+                  ? [String(alertRule.mentionUserId || "").trim()]
+                  : [],
+                dryRun: false,
+              }
+            : { dryRun: true },
+      },
+      defaults,
+    ),
+  };
+}
+
+async function createInspectionApiExecution(config, options) {
+  const apiBaseUrl = normalizeInspectionApiBaseUrl(process.env.INSPECTION_API_BASE_URL);
+  const payload = {
+    storeName: String(options.storeName || "").trim(),
+    planName: String(options.planName || "").trim(),
+    source: String(options.source || "").trim(),
+    operatorName: "OpenClaw",
+    operatorWecomUserId: "openclaw",
+    triggerType: "manual",
+    triggerSource: "stream_frame_watch_analyze",
+  };
+  const response = await postJson(`${apiBaseUrl}/manual-executions`, payload);
+  return buildInspectionApiJob(config, response);
+}
+
+function buildInspectionResultItemsPayload(result) {
+  if (!Array.isArray(result?.clauseResults)) {
+    return [];
+  }
+  return result.clauseResults.map((item) => ({
+    clause: String(item?.clause || "").trim(),
+    clauseType: String(item?.clauseType || "generic").trim() || "generic",
+    matched: Boolean(item?.matched),
+    evidence: String(item?.evidence || "").trim(),
+  }));
+}
+
+function buildInspectionResultArtifactsPayload(job, result) {
+  const publicBaseUrl = job?.reporting?.publicBaseUrl || DEFAULT_REPORT_PUBLIC_BASE_URL;
+  const artifacts = [];
+  if (result?.savedFramePath) {
+    artifacts.push({
+      artifactType: "frame",
+      fileUrl: toPublicReportUrl(result.savedFramePath, publicBaseUrl),
+      filePath: result.savedFramePath,
+    });
+  }
+  if (inspectionTypeOfJob(job) !== "description" && result?.savedDiffPath) {
+    artifacts.push({
+      artifactType: "diff",
+      fileUrl: toPublicReportUrl(result.savedDiffPath, publicBaseUrl),
+      filePath: result.savedDiffPath,
+    });
+  }
+  return artifacts;
+}
+
+function normalizeDescriptionPluginFields(job, result) {
+  if (!job?.descriptionText) {
+    return {
+      pluginRecommendation: String(result?.pluginRecommendation || "none").trim(),
+      pluginRecommendationReason: String(result?.pluginRecommendationReason || "").trim(),
+    };
+  }
+  return {
+    pluginRecommendation: "none",
+    pluginRecommendationReason: "",
+  };
+}
+
+async function writeInspectionApiResult(execution, job, result) {
+  if (!execution?.apiJobId) {
+    return null;
+  }
+  const apiBaseUrl = normalizeInspectionApiBaseUrl(process.env.INSPECTION_API_BASE_URL);
+  const reportUrl =
+    String(result?.report?.docUrl || "").trim() ||
+    toPublicReportUrl(result?.savedFramePath || "", job?.reporting?.publicBaseUrl || DEFAULT_REPORT_PUBLIC_BASE_URL);
+  const observedSummary = job?.descriptionText
+    ? buildDescriptionObservedSummary(job, result)
+    : String(
+        result?.observedSummary ||
+          (Array.isArray(result?.reasons) && result.reasons.length > 0 ? result.reasons.join("；") : ""),
+      ).trim();
+  const pluginFields = normalizeDescriptionPluginFields(job, result);
+  return await postJson(`${apiBaseUrl}/inspection-results`, {
+    jobId: execution.apiJobId,
+    storeName: String(job?.storeName || "").trim(),
+    planName: String(job?.name || "").trim(),
+    monitorName: String(job?.monitorName || "").trim(),
+    source: String(job?.source || "").trim(),
+    inspectionType: inspectionTypeOfJob(job),
+    framePickMode: String(job?.framePickMode || "").trim(),
+    sampledAtSeconds: Number.isFinite(Number(result?.offsetSeconds)) ? Number(Number(result.offsetSeconds).toFixed(3)) : 0,
+    verdict: String(result?.verdict || "").trim(),
+    matchPercent: Number.isFinite(Number(result?.matchPercent)) ? Number(Number(result.matchPercent).toFixed(2)) : 0,
+    differencePercent: Number.isFinite(Number(result?.score)) ? toPercent(Number(result.score)) : 0,
+    observedSummary,
+    fallbackUsed: Boolean(result?.fallbackUsed),
+    fallbackReason: String(result?.fallbackReason || "").trim(),
+    pluginRecommendation: pluginFields.pluginRecommendation,
+    pluginRecommendationReason: pluginFields.pluginRecommendationReason,
+    reportUrl,
+    docUrl: String(result?.report?.docUrl || "").trim(),
+    items: buildInspectionResultItemsPayload(result),
+    artifacts: buildInspectionResultArtifactsPayload(job, result),
+  });
 }
 
 async function downloadIfRemote(input, outputPath) {
@@ -1552,33 +1821,239 @@ function describeClauseType(clauseType) {
   }
 }
 
+function summarizeClauseResults(clauseResults) {
+  const items = Array.isArray(clauseResults) ? clauseResults : [];
+  const passedCount = items.filter((item) => item?.matched).length;
+  const failedCount = items.length - passedCount;
+  return {
+    totalCount: items.length,
+    passedCount,
+    failedCount,
+  };
+}
+
+function formatClauseBusinessStatus(item, fallbackUsed) {
+  if (item?.matched) {
+    return "通过";
+  }
+  return fallbackUsed ? "待人工复核" : "未通过";
+}
+
+function buildDescriptionBusinessSummary(job, analysis) {
+  const { totalCount, passedCount, failedCount } = summarizeClauseResults(analysis?.clauseResults);
+  const threshold = Number(job.matchThresholdPercent || DEFAULT_DESCRIPTION_MATCH_THRESHOLD_PERCENT);
+  if (analysis?.fallbackUsed) {
+    if (failedCount > 0) {
+      return `本次巡检未通过，共检查 ${totalCount} 项，已确认 ${passedCount} 项，另有 ${failedCount} 项暂未自动确认，当前按未通过处理。`;
+    }
+    return `本次巡检通过，共检查 ${totalCount} 项，当前画面与门店预期场景基本一致。`;
+  }
+  if (analysis?.matchPercent < threshold) {
+    return `本次巡检未通过，共检查 ${totalCount} 项，其中 ${passedCount} 项通过，${failedCount} 项未通过。`;
+  }
+  return `本次巡检通过，共检查 ${totalCount} 项，全部满足当前巡检要求。`;
+}
+
+function buildDescriptionObservedSummary(job, analysis) {
+  if (!analysis) {
+    return "";
+  }
+  if (analysis.fallbackUsed) {
+    const { failedCount } = summarizeClauseResults(analysis.clauseResults);
+    if (failedCount > 0) {
+      return "系统已确认主场景与门店预期接近，但细项点检暂未自动确认完成，因此本次结果按未通过处理。";
+    }
+    return "系统已完成场景级复核，当前画面与门店预期基本一致。";
+  }
+  return String(analysis.observedSummary || "").trim();
+}
+
+function buildDescriptionActionSuggestion(analysis) {
+  if (!analysis?.fallbackUsed) {
+    return "";
+  }
+  return "建议人工复核未自动确认的点检项。";
+}
+
+function buildDescriptionClauseBuckets(analysis) {
+  const passedItems = [];
+  const pendingItems = [];
+  const failedItems = [];
+  for (const item of Array.isArray(analysis?.clauseResults) ? analysis.clauseResults : []) {
+    if (item?.matched) {
+      passedItems.push(item);
+      continue;
+    }
+    if (analysis?.fallbackUsed) {
+      pendingItems.push(item);
+      continue;
+    }
+    failedItems.push(item);
+  }
+  return {
+    passedItems,
+    pendingItems,
+    failedItems,
+  };
+}
+
+function formatDescriptionClauseLabel(item) {
+  return `[${describeClauseType(item?.clauseType)}] ${String(item?.clause || "").trim()}`;
+}
+
+function extractDescriptionClauseTitle(item) {
+  const rawClause = String(item?.clause || "").trim();
+  if (!rawClause) {
+    return "点检项";
+  }
+
+  const slashParts = rawClause
+    .split("/")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const tailSegment = slashParts.length > 0 ? slashParts[slashParts.length - 1] : rawClause;
+  const colonParts = tailSegment
+    .split(/[：:]/u)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const preferred = colonParts.length > 0 ? colonParts[0] : tailSegment;
+
+  if (/^(?:必须包含|需要包含|需包含|应包含|必须有|需要有|需有|应有)(.+)$/u.test(preferred)) {
+    return `是否${preferred.replace(/^(?:必须包含|需要包含|需包含|应包含|必须有|需要有|需有|应有)/u, "").trim()}`;
+  }
+  if (/^(?:不得出现|禁止出现|不能出现|不可出现)(.+)$/u.test(preferred)) {
+    return `是否出现${preferred.replace(/^(?:不得出现|禁止出现|不能出现|不可出现)/u, "").trim()}`;
+  }
+  if (/^(?:不得有|禁止有|不能有|不可有)(.+)$/u.test(preferred)) {
+    return `是否有${preferred.replace(/^(?:不得有|禁止有|不能有|不可有)/u, "").trim()}`;
+  }
+  if (/^不是(.+)$/u.test(preferred)) {
+    return `是否为${preferred.replace(/^不是/u, "").trim()}`;
+  }
+  if (/^(?:画面|场景).{0,8}(?:应|应当|需要|需|应该|必须)?为/u.test(preferred)) {
+    return preferred.replace(/^(?:画面|场景)/u, "").trim() || rawClause;
+  }
+  return preferred || rawClause;
+}
+
+function formatDescriptionClauseEvidence(item) {
+  const evidence = String(item?.evidence || "").trim();
+  return evidence || "当前帧未返回明确比对依据";
+}
+
+function formatDescriptionClauseDetailLine(item) {
+  return `${extractDescriptionClauseTitle(item)}（${formatDescriptionClauseEvidence(item)}）`;
+}
+
+function buildDescriptionSectionLines(title, items, emptyText) {
+  const lines = [title];
+  if (!Array.isArray(items) || items.length === 0) {
+    lines.push(`- ${emptyText}`);
+    return lines;
+  }
+  items.forEach((item, index) => {
+    lines.push(`${index + 1}. ${formatDescriptionClauseDetailLine(item)}`);
+  });
+  return lines;
+}
+
 function buildDescriptionReasons(job, analysis) {
   const reasons = [];
   const threshold = Number(job.matchThresholdPercent || DEFAULT_DESCRIPTION_MATCH_THRESHOLD_PERCENT);
-  if (analysis.fallbackUsed) {
-    reasons.push(`兜底复核: 已启用${analysis.fallbackReason ? `（${analysis.fallbackReason}）` : ""}`);
+  const summary = buildDescriptionBusinessSummary(job, analysis);
+  if (summary) {
+    reasons.push(summary);
   }
-  if (analysis.observedSummary) {
-    reasons.push(`画面摘要: ${analysis.observedSummary}`);
+  const observedSummary = buildDescriptionObservedSummary(job, analysis);
+  if (observedSummary) {
+    reasons.push(`画面判断: ${observedSummary}`);
   }
   if (Array.isArray(analysis.clauseResults) && analysis.clauseResults.length > 0) {
     const orderedClauseResults = [...analysis.clauseResults].sort((left, right) => Number(left.matched) - Number(right.matched));
     for (const item of orderedClauseResults.slice(0, 6)) {
-      reasons.push(
-        `${item.matched ? "满足" : "不满足"}[${describeClauseType(item.clauseType)}]: ${item.clause}（${item.evidence}）`,
-      );
+      const label = formatClauseBusinessStatus(item, analysis.fallbackUsed);
+      reasons.push(`${label}[${describeClauseType(item.clauseType)}]: ${formatDescriptionClauseDetailLine(item)}`);
     }
   }
-  reasons.push(...analysis.reasons);
   if (analysis.matchPercent < threshold) {
-    reasons.push(`匹配度 ${analysis.matchPercent.toFixed(2)}% 低于阈值 ${threshold.toFixed(2)}%`);
+    reasons.push(`匹配度 ${analysis.matchPercent.toFixed(2)}%，低于通过阈值 ${threshold.toFixed(2)}%。`);
   } else {
-    reasons.push(`匹配度 ${analysis.matchPercent.toFixed(2)}% 达到阈值 ${threshold.toFixed(2)}%`);
+    reasons.push(`匹配度 ${analysis.matchPercent.toFixed(2)}%，达到通过阈值 ${threshold.toFixed(2)}%。`);
   }
-  if (analysis.pluginRecommendationReason) {
-    reasons.push(`插件建议: ${analysis.pluginRecommendationReason}`);
+  const actionSuggestion = buildDescriptionActionSuggestion(analysis);
+  if (actionSuggestion) {
+    reasons.push(`处理建议: ${actionSuggestion}`);
   }
   return [...new Set(reasons.filter(Boolean))];
+}
+
+async function runDescriptionBaselineFallback(job, framePath, diffPath, tempRoot, reason) {
+  if (!job.baselineImage) {
+    throw new Error(
+      reason || "视觉模型当前无稳定输出，且当前门店未配置基准图，暂时无法做门店兜底",
+    );
+  }
+
+  const checklist = normalizeDescriptionChecklist(job.descriptionText);
+  const workingBaseline = await downloadIfRemote(
+    job.baselineImage,
+    path.join(tempRoot, "baseline-fallback-source.bin"),
+  );
+  const baselinePath = await prepareBaselineImage(workingBaseline, tempRoot, job);
+  const { score } = await compareImages(baselinePath, framePath, diffPath);
+  const similarityPercent = toPercent(differenceToSimilarity(score));
+  const threshold = Number(job.matchThresholdPercent || DEFAULT_DESCRIPTION_MATCH_THRESHOLD_PERCENT);
+  const sceneMatched = similarityPercent >= threshold;
+  const hasNonSceneClauses = checklist.some((entry) => entry.clauseType !== "scene_expectation");
+
+  const clauseResults = checklist.map((entry) => {
+    if (entry.clauseType === "scene_expectation") {
+      return {
+        clause: entry.clause,
+        clauseType: entry.clauseType,
+        matched: sceneMatched,
+        evidence: sceneMatched
+          ? `当前帧与门店基准图相似度 ${similarityPercent.toFixed(2)}%，可确认主场景基本一致`
+          : `当前帧与门店基准图相似度仅 ${similarityPercent.toFixed(2)}%，主场景与预期不一致`,
+      };
+    }
+
+    return {
+      clause: entry.clause,
+      clauseType: entry.clauseType,
+      matched: false,
+      evidence: "当前仅完成场景级确认；该细项未做独立识别计算，建议人工复核",
+    };
+  });
+  const matchedCount = clauseResults.filter((entry) => entry.matched).length;
+  const matchPercent = clauseResults.length > 0 ? Number(((matchedCount / clauseResults.length) * 100).toFixed(2)) : 0;
+
+  const reasons = [
+    reason || "细项识别结果不稳定，本次先用门店基准图完成场景复核",
+    sceneMatched
+      ? `门店基准图兜底通过，相似度 ${similarityPercent.toFixed(2)}%`
+      : `门店基准图兜底未通过，相似度 ${similarityPercent.toFixed(2)}%`,
+  ];
+  if (hasNonSceneClauses) {
+    reasons.push("存在对象/状态级点检项，门店基准图只做场景兜底，相关条款已按保守策略处理");
+  }
+
+  return {
+    score,
+    matchPercent,
+    observedSummary: sceneMatched
+      ? hasNonSceneClauses
+        ? "已确认主场景接近预期，但细项点检暂未自动确认，当前按未通过处理"
+        : "已根据门店基准图确认当前画面与预期场景接近"
+      : "已根据门店基准图判断当前画面与预期场景偏离较大",
+    matched: clauseResults.every((entry) => entry.matched),
+    clauseResults,
+    reasons,
+    pluginRecommendation: "none",
+    pluginRecommendationReason: "",
+    fallbackUsed: true,
+    fallbackReason: reason || "细项识别结果不稳定，本次先用门店基准图完成场景复核",
+  };
 }
 
 function buildAlertMessage(job, result) {
@@ -1606,22 +2081,44 @@ function buildAlertMessage(job, result) {
   const thresholdPercent = toPercent(job.compareThreshold);
   const thresholdSimilarityPercent = toPercent(differenceToSimilarity(job.compareThreshold));
   if (job.descriptionText) {
-    return `${prefix}流画面文字巡检告警
-
-门店: ${job.storeName || job.name || job.id}
-任务: ${job.name || job.id}
-点检项: ${job.descriptionText}
-结论: ${result.verdict}
-匹配度: ${result.matchPercent.toFixed(2)}%
-报警阈值: 匹配度 < ${Number(job.matchThresholdPercent).toFixed(2)}%
-抽帧时间: ${result.offsetSeconds.toFixed(3)}s
-原因: ${(result.reasons || [])[0] || "点检项不匹配"}
-时间: ${new Date(result.capturedAtMs).toLocaleString("zh-CN", { hour12: false })}`;
+    const stats = summarizeClauseResults(result.clauseResults);
+    const buckets = buildDescriptionClauseBuckets(result);
+    const observedSummary = buildDescriptionObservedSummary(job, result);
+    const actionSuggestion = buildDescriptionActionSuggestion(result);
+    const verdictLabel = formatInspectionVerdict(result.verdict, {
+      inspectionType: "description",
+      fallbackUsed: result.fallbackUsed,
+    });
+    const lines = [
+      `${prefix}流画面文字巡检告警`.trim(),
+      "",
+      `门店: ${job.storeName || job.name || job.id}`,
+      job.monitorName ? `监控模块: ${job.monitorName}` : "",
+      `任务: ${job.name || job.id}`,
+      `本次结论: ${verdictLabel}`,
+      `巡检概览: 共检查 ${stats.totalCount} 项，${stats.passedCount} 项已确认通过，${stats.failedCount} 项${result.fallbackUsed ? "待人工复核" : "未通过"}`,
+      `匹配度: ${result.matchPercent.toFixed(2)}%`,
+      `通过阈值: ${Number(job.matchThresholdPercent).toFixed(2)}%`,
+      `抽帧时间: ${result.offsetSeconds.toFixed(3)}s`,
+      `画面判断: ${observedSummary || "当前画面与巡检要求不一致"}`,
+      "",
+      ...buildDescriptionSectionLines("已确认通过:", buckets.passedItems, "本次暂无已确认通过项"),
+      "",
+      ...buildDescriptionSectionLines(
+        result.fallbackUsed ? "待人工复核:" : "未通过项:",
+        result.fallbackUsed ? buckets.pendingItems : buckets.failedItems,
+        result.fallbackUsed ? "本次暂无待人工复核项" : "本次暂无未通过项",
+      ),
+      "",
+      `建议动作: ${actionSuggestion || "请按未通过项处理"}`,
+      `时间: ${new Date(result.capturedAtMs).toLocaleString("zh-CN", { hour12: false })}`,
+    ];
+    return lines.join("\n");
   }
   return `${prefix}流画面差异告警
 
 门店: ${job.storeName || job.name || job.id}
-任务: ${job.name || job.id}
+${job.monitorName ? `监控模块: ${job.monitorName}\n` : ""}任务: ${job.name || job.id}
 结论: ${result.verdict}
 差异度: ${differencePercent}%
 相似度: ${similarityPercent}%
@@ -1682,27 +2179,53 @@ async function notify(job, result) {
 
 function buildAnalyzePayload(job, result) {
   if (job.descriptionText) {
+    const pluginFields = normalizeDescriptionPluginFields(job, result);
+    const stats = summarizeClauseResults(result.clauseResults);
+    const buckets = buildDescriptionClauseBuckets(result);
+    const observedSummary = buildDescriptionObservedSummary(job, result);
+    const actionSuggestion = buildDescriptionActionSuggestion(result);
+    const verdictLabel = formatInspectionVerdict(result.verdict, {
+      inspectionType: "description",
+      fallbackUsed: result.fallbackUsed,
+    });
     return {
       ok: true,
       sceneId: job.id,
       sceneName: job.name || job.id,
       storeName: job.storeName || job.name || job.id,
+      monitorName: job.monitorName || "",
       inspectionType: "description",
       source: job.source,
       descriptionText: job.descriptionText,
       verdict: result.verdict,
+      verdictLabel,
       matchScore: Number(matchPercentToScore(result.matchPercent).toFixed(6)),
       matchPercent: Number(result.matchPercent.toFixed(2)),
       thresholdMatchPercent: Number(Number(job.matchThresholdPercent).toFixed(2)),
       framePickMode: job.framePickMode,
       sampledAtSeconds: Number(result.offsetSeconds.toFixed(3)),
-      observedSummary: result.observedSummary,
+      observedSummary,
+      businessSummary: buildDescriptionBusinessSummary(job, result),
+      checklistOverview: {
+        totalCount: stats.totalCount,
+        passedCount: stats.passedCount,
+        failedCount: stats.failedCount,
+      },
+      businessBreakdown: {
+        passedItems: buckets.passedItems.map((item) => formatDescriptionClauseLabel(item)),
+        reviewItems: buckets.pendingItems.map((item) => formatDescriptionClauseLabel(item)),
+        failedItems: buckets.failedItems.map((item) => formatDescriptionClauseLabel(item)),
+        passedItemDetails: buckets.passedItems.map((item) => formatDescriptionClauseDetailLine(item)),
+        reviewItemDetails: buckets.pendingItems.map((item) => formatDescriptionClauseDetailLine(item)),
+        failedItemDetails: buckets.failedItems.map((item) => formatDescriptionClauseDetailLine(item)),
+      },
       reasons: result.reasons,
       clauseResults: result.clauseResults,
-      pluginRecommendation: result.pluginRecommendation,
-      pluginRecommendationReason: result.pluginRecommendationReason,
+      pluginRecommendation: pluginFields.pluginRecommendation,
+      pluginRecommendationReason: pluginFields.pluginRecommendationReason,
       fallbackUsed: Boolean(result.fallbackUsed),
       fallbackReason: String(result.fallbackReason || ""),
+      actionSuggestion,
       artifacts: {
         frame: result.savedFramePath,
         diff: "",
@@ -1719,6 +2242,7 @@ function buildAnalyzePayload(job, result) {
     sceneId: job.id,
     sceneName: job.name || job.id,
     storeName: job.storeName || job.name || job.id,
+    monitorName: job.monitorName || "",
     inspectionType: "baseline",
     source: job.source,
     baselineImage: job.baselineImage,
@@ -1740,29 +2264,44 @@ function buildAnalyzePayload(job, result) {
   };
 }
 
-function formatInspectionVerdict(verdict) {
-  return verdict === "violation" ? "异常" : "通过";
+function formatInspectionVerdict(verdict, options = {}) {
+  if (verdict !== "violation") {
+    return "通过";
+  }
+  if (options.inspectionType === "description") {
+    return options.fallbackUsed ? "未通过（需人工复核）" : "未通过";
+  }
+  return "异常";
 }
 
 function buildReportRecord(job, result) {
   const timezone = job.reporting?.timezone || DEFAULT_REPORT_TIMEZONE;
+  const inspectionType = inspectionTypeOfJob(job);
+  const observedSummary =
+    inspectionType === "description"
+      ? buildDescriptionObservedSummary(job, result)
+      : String(result.observedSummary || "").trim();
   return {
     id: `${job.id}-${result.capturedAtMs}`,
     capturedAtMs: result.capturedAtMs,
     capturedAtText: formatDateTimeLabel(result.capturedAtMs, timezone),
     storeName: job.storeName || job.name || job.id,
+    monitorName: job.monitorName || "",
     sceneId: job.id,
     sceneName: job.name || job.id,
-    inspectionType: inspectionTypeOfJob(job),
+    inspectionType,
     verdict: result.verdict,
-    verdictLabel: formatInspectionVerdict(result.verdict),
+    verdictLabel: formatInspectionVerdict(result.verdict, {
+      inspectionType,
+      fallbackUsed: Boolean(result.fallbackUsed),
+    }),
     source: job.source,
     framePickMode: job.framePickMode,
     sampledAtSeconds: Number(result.offsetSeconds || 0).toFixed(3),
     baselineImage: job.baselineImage || "",
     descriptionText: job.descriptionText || "",
     reasons: Array.isArray(result.reasons) ? result.reasons.slice(0, 8) : [],
-    observedSummary: String(result.observedSummary || "").trim(),
+    observedSummary,
     differencePercent: Number.isFinite(result.score) ? toPercent(result.score) : null,
     similarityPercent: Number.isFinite(result.score) ? toPercent(differenceToSimilarity(result.score)) : null,
     thresholdDifferencePercent: job.descriptionText ? null : toPercent(job.compareThreshold),
@@ -1771,11 +2310,12 @@ function buildReportRecord(job, result) {
     thresholdMatchPercent: job.descriptionText ? Number(Number(job.matchThresholdPercent).toFixed(2)) : null,
     fallbackUsed: Boolean(result.fallbackUsed),
     fallbackReason: String(result.fallbackReason || "").trim(),
-    clauseResults: Array.isArray(result.clauseResults) ? result.clauseResults.slice(0, 12) : [],
+    clauseResults: Array.isArray(result.clauseResults) ? result.clauseResults : [],
     framePath: result.savedFramePath || "",
     frameUrl: toPublicReportUrl(result.savedFramePath, job.reporting?.publicBaseUrl),
-    diffPath: result.savedDiffPath || "",
-    diffUrl: toPublicReportUrl(result.savedDiffPath, job.reporting?.publicBaseUrl),
+    diffPath: inspectionType === "description" ? "" : result.savedDiffPath || "",
+    diffUrl:
+      inspectionType === "description" ? "" : toPublicReportUrl(result.savedDiffPath, job.reporting?.publicBaseUrl),
   };
 }
 
@@ -1783,6 +2323,7 @@ const SMARTSHEET_REPORT_FIELDS = [
   { title: "记录ID", type: "FIELD_TYPE_TEXT", defaultField: true },
   { title: "巡检时间", type: "FIELD_TYPE_DATE_TIME" },
   { title: "巡检门店", type: "FIELD_TYPE_TEXT" },
+  { title: "监控模块", type: "FIELD_TYPE_TEXT" },
   { title: "巡检任务", type: "FIELD_TYPE_TEXT" },
   { title: "巡检类型", type: "FIELD_TYPE_TEXT" },
   { title: "巡检结果", type: "FIELD_TYPE_TEXT" },
@@ -1805,6 +2346,7 @@ const SMARTSHEET_REPORT_FIELDS = [
 const DIRECT_SMARTSHEET_EXTRA_FIELDS = [
   { key: "capturedAt", title: "巡检时间", type: "FIELD_TYPE_TEXT" },
   { key: "storeName", title: "巡检门店", type: "FIELD_TYPE_TEXT" },
+  { key: "monitorName", title: "监控模块", type: "FIELD_TYPE_TEXT" },
   { key: "sceneName", title: "巡检任务", type: "FIELD_TYPE_TEXT" },
   { key: "inspectionType", title: "巡检类型", type: "FIELD_TYPE_TEXT" },
   { key: "verdictLabel", title: "巡检结果", type: "FIELD_TYPE_TEXT" },
@@ -1912,12 +2454,50 @@ async function resolveWecomUploadImageAccessToken(reporting) {
   if (explicitToken) {
     return explicitToken;
   }
+
   const command = String(reporting?.uploadImageAccessTokenCommand || "").trim();
-  if (!command) {
+  if (command) {
+    const { stdout } = await runBinary("sh", ["-lc", command]);
+    return String(stdout || "").trim().split(/\s+/u)[0] || "";
+  }
+
+  const corpid = String(reporting?.uploadCorpid || "").trim();
+  const secret = String(reporting?.uploadSecret || "").trim();
+  if (!corpid || !secret) {
     return "";
   }
-  const { stdout } = await runBinary("sh", ["-lc", command]);
-  return String(stdout || "").trim().split(/\s+/u)[0] || "";
+
+  const cacheKey = `${corpid}:${secret}`;
+  if (
+    cachedWecomAccessToken.cacheKey === cacheKey &&
+    cachedWecomAccessToken.token &&
+    cachedWecomAccessToken.expiresAtMs > Date.now() + 60_000
+  ) {
+    return cachedWecomAccessToken.token;
+  }
+
+  const tokenUrl = new URL(String(reporting?.uploadAccessTokenApiUrl || DEFAULT_WECOM_ACCESS_TOKEN_API_URL).trim());
+  tokenUrl.searchParams.set("corpid", corpid);
+  tokenUrl.searchParams.set("corpsecret", secret);
+
+  const response = await fetch(tokenUrl);
+  const rawText = await response.text();
+  const parsed = maybeParseJson(rawText);
+  if (!response.ok) {
+    throw new Error(`Fetch WeCom access token failed: HTTP ${response.status}: ${rawText}`);
+  }
+  if (Number(parsed?.errcode || 0) !== 0 || !parsed?.access_token) {
+    throw new Error(`Fetch WeCom access token failed: ${parsed?.errmsg || rawText || "unknown error"}`);
+  }
+
+  const token = String(parsed.access_token || "").trim();
+  const expiresInMs = Math.max(60, Number(parsed?.expires_in || 7200)) * 1000;
+  cachedWecomAccessToken = {
+    cacheKey,
+    token,
+    expiresAtMs: Date.now() + expiresInMs,
+  };
+  return token;
 }
 
 async function uploadWecomImage(reporting, filePath) {
@@ -1974,7 +2554,7 @@ async function prepareSmartsheetRecordMedia(job, record) {
       const dimensions = await readImageDimensions(record.framePath);
       prepared.frameImageValue = buildDetailedImageCell(prepared.frameImageUrl, {
         id: `${record.id}-frame`,
-        title: `${record.storeName || record.sceneName || record.id}巡检图`,
+        title: `${record.storeName || record.monitorName || record.sceneName || record.id}巡检图`,
         width: dimensions.width,
         height: dimensions.height,
       });
@@ -1991,7 +2571,7 @@ async function prepareSmartsheetRecordMedia(job, record) {
       const dimensions = await readImageDimensions(record.diffPath);
       prepared.diffImageValue = buildDetailedImageCell(prepared.diffImageUrl, {
         id: `${record.id}-diff`,
-        title: `${record.storeName || record.sceneName || record.id}差异图`,
+        title: `${record.storeName || record.monitorName || record.sceneName || record.id}差异图`,
         width: dimensions.width,
         height: dimensions.height,
       });
@@ -2006,6 +2586,9 @@ async function prepareSmartsheetRecordMedia(job, record) {
 }
 
 async function supportsDirectSmartsheetReporting(reporting) {
+  if (String(reporting?.reportTransport || "auto").trim() === "mcp") {
+    return false;
+  }
   try {
     return Boolean(await resolveWecomUploadImageAccessToken(reporting));
   } catch {
@@ -2125,6 +2708,7 @@ function buildSmartsheetRecordValues(record) {
     记录ID: buildTextCell(record.id),
     巡检时间: record.capturedAtText,
     巡检门店: buildTextCell(record.storeName),
+    监控模块: buildTextCell(record.monitorName || "默认监控位"),
     巡检任务: buildTextCell(record.sceneName),
     巡检类型: buildTextCell(record.inspectionType === "description" ? "计划二·文字点检" : "计划一·基准图比对"),
     巡检结果: buildTextCell(record.verdictLabel),
@@ -2153,7 +2737,7 @@ function buildSmartsheetRecordValues(record) {
   if (frameImageValue) {
     values["巡检缩略图"] = frameImageValue;
   }
-  const diffImageValue = buildImageCell(record.diffImageUrl);
+  const diffImageValue = record.inspectionType === "description" ? null : buildImageCell(record.diffImageUrl);
   if (diffImageValue) {
     values["差异缩略图"] = diffImageValue;
   }
@@ -2161,7 +2745,7 @@ function buildSmartsheetRecordValues(record) {
   if (frameUrlValue) {
     values["巡检图片"] = frameUrlValue;
   }
-  const diffUrlValue = buildUrlCell(record.diffUrl, "查看差异图");
+  const diffUrlValue = record.inspectionType === "description" ? null : buildUrlCell(record.diffUrl, "查看差异图");
   if (diffUrlValue) {
     values["差异图"] = diffUrlValue;
   }
@@ -2185,6 +2769,7 @@ function buildDirectSmartsheetRecordValues(dailyDoc, record) {
   setTextField("recordId", record.id);
   setTextField("capturedAt", record.capturedAtText);
   setTextField("storeName", record.storeName);
+  setTextField("monitorName", record.monitorName || "默认监控位");
   setTextField("sceneName", record.sceneName);
   setTextField(
     "inspectionType",
@@ -2214,11 +2799,13 @@ function buildDirectSmartsheetRecordValues(dailyDoc, record) {
   if (fieldMap.frameImage && record.frameImageValue) {
     values[fieldMap.frameImage] = record.frameImageValue;
   }
-  if (fieldMap.diffImage && record.diffImageValue) {
+  if (record.inspectionType !== "description" && fieldMap.diffImage && record.diffImageValue) {
     values[fieldMap.diffImage] = record.diffImageValue;
   }
   setTextField("frameUrl", record.frameUrl);
-  setTextField("diffUrl", record.diffUrl);
+  if (record.inspectionType !== "description") {
+    setTextField("diffUrl", record.diffUrl);
+  }
   setTextField("sourceUrl", record.source);
 
   return Object.fromEntries(
@@ -2241,6 +2828,7 @@ function buildReportDocMarkdown(dateKey, docName, records, timezone) {
     lines.push(`## ${escapeMarkdownText(record.capturedAtText)} · ${escapeMarkdownText(record.storeName)}`);
     lines.push("");
     lines.push(`- 巡检门店: ${escapeMarkdownText(record.storeName)}`);
+    lines.push(`- 监控模块: ${escapeMarkdownText(record.monitorName || "默认监控位")}`);
     lines.push(`- 巡检任务: ${escapeMarkdownText(record.sceneName)}`);
     lines.push(`- 巡检类型: ${record.inspectionType === "description" ? "计划二·文字点检" : "计划一·基准图比对"}`);
     lines.push(`- 巡检结果: ${escapeMarkdownText(record.verdictLabel)}`);
@@ -2271,7 +2859,7 @@ function buildReportDocMarkdown(dateKey, docName, records, timezone) {
       lines.push(`- 巡检图片: ${record.frameUrl}`);
       lines.push(`![${escapeMarkdownText(record.storeName)}巡检图](${record.frameUrl})`);
     }
-    if (record.diffUrl) {
+    if (record.inspectionType !== "description" && record.diffUrl) {
       lines.push(`- 差异图: ${record.diffUrl}`);
       lines.push(`![${escapeMarkdownText(record.storeName)}差异图](${record.diffUrl})`);
     }
@@ -2279,11 +2867,26 @@ function buildReportDocMarkdown(dateKey, docName, records, timezone) {
       lines.push(`- 流地址: ${record.source}`);
     }
     if (record.clauseResults && record.clauseResults.length > 0) {
-      lines.push("- 条款明细:");
-      for (const clauseResult of record.clauseResults.slice(0, 6)) {
-        lines.push(
-          `  - ${clauseResult.matched ? "通过" : "未通过"} ${escapeMarkdownText(clauseResult.clause)}：${escapeMarkdownText(clauseResult.evidence)}`,
-        );
+      const buckets = buildDescriptionClauseBuckets({
+        clauseResults: record.clauseResults,
+        fallbackUsed: record.fallbackUsed,
+      });
+      lines.push("- 已确认通过:");
+      if (buckets.passedItems.length === 0) {
+        lines.push("  - 无");
+      } else {
+        for (const clauseResult of buckets.passedItems) {
+          lines.push(`  - ${escapeMarkdownText(formatDescriptionClauseDetailLine(clauseResult))}`);
+        }
+      }
+      lines.push(record.fallbackUsed ? "- 待人工复核:" : "- 未通过项:");
+      const targetItems = record.fallbackUsed ? buckets.pendingItems : buckets.failedItems;
+      if (targetItems.length === 0) {
+        lines.push("  - 无");
+      } else {
+        for (const clauseResult of targetItems) {
+          lines.push(`  - ${escapeMarkdownText(formatDescriptionClauseDetailLine(clauseResult))}`);
+        }
       }
     }
     lines.push("");
@@ -2315,9 +2918,15 @@ async function ensureDailyReportDoc(state, reporting, timestampMs) {
   dailyDoc.remoteRecordIds =
     dailyDoc.remoteRecordIds && typeof dailyDoc.remoteRecordIds === "object" ? dailyDoc.remoteRecordIds : {};
   dailyDoc.fieldMap = dailyDoc.fieldMap && typeof dailyDoc.fieldMap === "object" ? dailyDoc.fieldMap : {};
-  const useDirectSmartsheet = reporting.reportFormat !== "document" && (await supportsDirectSmartsheetReporting(reporting));
+  const directSmartsheetAvailable =
+    reporting.reportFormat !== "document" && (await supportsDirectSmartsheetReporting(reporting));
+  if (reporting.reportFormat !== "document" && reporting.reportTransport === "direct" && !directSmartsheetAvailable) {
+    throw new Error(
+      "巡检报告已配置为服务端直连企业微信智能表格，但当前无法获取企业应用 access_token；请检查 WECOM_UPLOAD_CORPID / WECOM_UPLOAD_SECRET 或 WECOM_UPLOAD_IMAGE_ACCESS_TOKEN_COMMAND",
+    );
+  }
   const expectedDocType =
-    reporting.reportFormat === "document" ? "document" : useDirectSmartsheet ? "smartsheet-direct" : "smartsheet";
+    reporting.reportFormat === "document" ? "document" : directSmartsheetAvailable ? "smartsheet-direct" : "smartsheet";
   if (dailyDoc.docId && dailyDoc.docType !== expectedDocType) {
     dailyDoc.docId = "";
     dailyDoc.docUrl = "";
@@ -2576,17 +3185,30 @@ async function analyzeJob(job) {
     await copyFile(framePath, savedFramePath);
 
     if (job.descriptionText) {
-      const primaryAnalysis = await callVisionDescriptionInspector(job, framePath);
-      const fallbackDecision = shouldRunDescriptionFallback(job, primaryAnalysis);
-      let analysis = primaryAnalysis;
-      if (fallbackDecision.shouldRun) {
-        const fallbackAnalysis = await callVisionDescriptionModel(
+      let analysis = null;
+      try {
+        const primaryAnalysis = await callVisionDescriptionInspector(job, framePath);
+        const fallbackDecision = shouldRunDescriptionFallback(job, primaryAnalysis);
+        analysis = primaryAnalysis;
+        if (fallbackDecision.shouldRun) {
+          const fallbackAnalysis = await callVisionDescriptionModel(
+            job,
+            framePath,
+            buildDescriptionFallbackPrompt(job, primaryAnalysis, fallbackDecision.reason),
+            "stream_watch_description_inspection_review",
+          );
+          analysis = mergeDescriptionAnalyses(primaryAnalysis, fallbackAnalysis, fallbackDecision.reason);
+        }
+      } catch (error) {
+        const fallbackDetail = error instanceof Error ? error.message : String(error);
+        log(job.id, `description vision fallback triggered: ${fallbackDetail}`);
+        analysis = await runDescriptionBaselineFallback(
           job,
           framePath,
-          buildDescriptionFallbackPrompt(job, primaryAnalysis, fallbackDecision.reason),
-          "stream_watch_description_inspection_review",
+          diffPath,
+          tempRoot,
+          "细项识别结果不稳定，本次先用门店基准图完成场景复核",
         );
-        analysis = mergeDescriptionAnalyses(primaryAnalysis, fallbackAnalysis, fallbackDecision.reason);
       }
       const verdict =
         analysis.matchPercent < Number(job.matchThresholdPercent || DEFAULT_DESCRIPTION_MATCH_THRESHOLD_PERCENT)
@@ -2597,16 +3219,16 @@ async function analyzeJob(job) {
         reasons: buildDescriptionReasons(job, analysis),
         offsetSeconds,
         capturedAtMs: nowMs,
-        savedFramePath,
-        savedDiffPath: "",
-        matchPercent: analysis.matchPercent,
-        observedSummary: analysis.observedSummary,
-        clauseResults: analysis.clauseResults,
-        pluginRecommendation: analysis.pluginRecommendation,
-        pluginRecommendationReason: analysis.pluginRecommendationReason,
-        fallbackUsed: Boolean(analysis.fallbackUsed),
-        fallbackReason: String(analysis.fallbackReason || ""),
-      };
+      savedFramePath,
+      savedDiffPath: "",
+      matchPercent: analysis.matchPercent,
+      observedSummary: analysis.observedSummary,
+      clauseResults: analysis.clauseResults,
+      pluginRecommendation: "none",
+      pluginRecommendationReason: "",
+      fallbackUsed: Boolean(analysis.fallbackUsed),
+      fallbackReason: String(analysis.fallbackReason || ""),
+    };
     }
 
     const workingBaseline = await downloadIfRemote(
@@ -2763,6 +3385,7 @@ async function listScenes(configPath) {
       id: job.id,
       name: job.name,
       storeName: job.storeName,
+      monitorName: job.monitorName,
       aliases: job.aliases,
       enabled: job.enabled,
       source: job.source,
@@ -2806,10 +3429,25 @@ function findSceneByQuery(config, queryText) {
     .map((rawJob) => normalizeJob(rawJob, config.defaults))
     .filter((job) => job.id);
   const query = String(queryText || "").trim();
+  const canonicalQuerySource = canonicalizeSourceLocator(query);
   let best = null;
   for (const job of normalizedJobs) {
-    const matchFields = dedupeStrings([job.id, job.name, job.storeName, ...(job.aliases || [])]);
+    const matchFields = dedupeStrings([
+      job.id,
+      job.name,
+      job.storeName,
+      ...(job.aliases || []),
+      job.source,
+      canonicalizeSourceLocator(job.source),
+    ]);
     for (const field of matchFields) {
+      if (canonicalQuerySource && canonicalQuerySource === canonicalizeSourceLocator(field)) {
+        return {
+          matchedBy: field,
+          matchedByType: "source",
+          job,
+        };
+      }
       const score = scoreSceneCandidate(query, field);
       if (!score) {
         continue;
@@ -2865,6 +3503,7 @@ async function resolveScene(configPath, queryText) {
         sceneId: job.id,
         sceneName: job.name,
         storeName: job.storeName,
+        monitorName: job.monitorName,
         aliases: job.aliases,
         inspectionType: inspectionTypeOfJob(job),
         source: job.source,
@@ -2887,8 +3526,9 @@ async function resolveScene(configPath, queryText) {
 async function runAnalyze(options) {
   const config = await loadConfig(options.configPath);
   let job = null;
+  let inspectionExecution = null;
   const defaultSceneId = String(config.defaults?.defaultSceneId || "").trim();
-  if (!options.sceneId && !options.source && !options.baselineImage) {
+  if (!options.sceneId && !options.source && !options.baselineImage && !options.storeName && !options.planName) {
     const fallbackJob =
       (defaultSceneId
         ? config.jobs.find((entry) => String(entry?.id || "").trim() === defaultSceneId)
@@ -2899,6 +3539,10 @@ async function runAnalyze(options) {
     if (fallbackJob) {
       job = normalizeJob(fallbackJob, config.defaults);
     }
+  }
+  if (!job && (options.storeName || options.planName)) {
+    inspectionExecution = await createInspectionApiExecution(config, options);
+    job = inspectionExecution.job;
   }
   if (!job && options.sceneId) {
     const found = config.jobs.find((entry) => String(entry?.id || "").trim() === options.sceneId);
@@ -2933,16 +3577,37 @@ async function runAnalyze(options) {
   }
 
   job = mergeAnalyzeOptionsIntoJob(job, options);
+  if (job.descriptionText && !job.baselineImage && job.source) {
+    const matchedScene = findSceneByQuery(config, job.source);
+    if (matchedScene?.job?.baselineImage) {
+      job = mergeAnalyzeOptionsIntoJob(job, { baselineImage: matchedScene.job.baselineImage });
+    }
+  }
   if (!job.source || (!job.baselineImage && !job.descriptionText)) {
     throw new Error(
       "analyze mode requires --scene or a source plus either --baseline or --description-text",
     );
   }
   const result = await analyzeJob(job);
-  if (options.writeReport) {
-    const state = await loadState(options.configPath, config.defaults);
-    result.report = await writeInspectionReport(state, job, result);
-    await saveState(state);
+  if (options.writeReport || inspectionExecution) {
+    try {
+      const state = await loadState(options.configPath, config.defaults);
+      result.report = await writeInspectionReport(state, job, result);
+      await saveState(state);
+    } catch (error) {
+      if (!inspectionExecution) {
+        throw error;
+      }
+      log(job.id, `report write skipped: ${error instanceof Error ? error.message : String(error)}`);
+      result.report = null;
+    }
+  }
+  if (inspectionExecution) {
+    try {
+      await writeInspectionApiResult(inspectionExecution, job, result);
+    } catch (error) {
+      log(job.id, `inspection result writeback skipped: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
   console.log(JSON.stringify(buildAnalyzePayload(job, result), null, 2));
 }

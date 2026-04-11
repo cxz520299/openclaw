@@ -42,6 +42,22 @@ rsync "${RSYNC_FLAGS[@]}" \
   -e "${RSYNC_RSH}" \
   "${ROOT_DIR}/" "${REMOTE}:${REMOTE_DIR}/"
 
+mkdir -p "${ROOT_DIR}/data/workspace"
+WORKSPACE_RSYNC_FLAGS=(-avc)
+
+if [[ "${MODE}" == "dry-run" ]]; then
+  WORKSPACE_RSYNC_FLAGS+=(-n)
+fi
+
+rsync "${WORKSPACE_RSYNC_FLAGS[@]}" \
+  --exclude='reports/stream-watch/' \
+  --exclude='reports/stream-watch-local/' \
+  --exclude='stream-watch/cache/' \
+  --exclude='stream-watch/cache-local/' \
+  --exclude='stream-watch/state/' \
+  -e "${RSYNC_RSH}" \
+  "${ROOT_DIR}/data/workspace/" "${REMOTE}:${REMOTE_DIR}/data/workspace/"
+
 if [[ "${MODE}" == "dry-run" ]]; then
   echo "==> Dry run complete"
   exit 0

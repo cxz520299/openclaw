@@ -1,11 +1,15 @@
 {
   "id": "wecom-doc-mcp",
   "name": "WeCom Document MCP",
-  "description": "Connect OpenClaw to the WeCom document MCP endpoint over Streamable HTTP.",
+  "description": "Connect OpenClaw to Enterprise WeChat document capabilities with direct APIs and MCP fallback.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "mode": {
+        "type": "string",
+        "description": "Preferred transport: auto, direct, or mcp."
+      },
       "docUrl": {
         "type": "string",
         "description": "Streamable HTTP MCP endpoint for WeCom documents."
@@ -17,6 +21,26 @@
       "timeoutMs": {
         "type": "number",
         "description": "Timeout hint for WeCom MCP calls."
+      },
+      "corpid": {
+        "type": "string",
+        "description": "Enterprise WeChat CorpID for direct document API access."
+      },
+      "secret": {
+        "type": "string",
+        "description": "Enterprise WeChat app secret for direct document API access."
+      },
+      "accessToken": {
+        "type": "string",
+        "description": "Explicit Enterprise WeChat access token for direct document API access."
+      },
+      "accessTokenCommand": {
+        "type": "string",
+        "description": "Shell command that outputs an Enterprise WeChat access token."
+      },
+      "accessTokenApiUrl": {
+        "type": "string",
+        "description": "Access token endpoint for direct Enterprise WeChat document API access."
       }
     }
   }

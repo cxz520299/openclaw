@@ -1,11 +1,30 @@
 services:
+  openclaw-data-permissions:
+    image: openclaw-vps:local
+    user: "0:0"
+    restart: "no"
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      STREAM_FRAME_WATCH_STATE_DIR: ${STREAM_FRAME_WATCH_STATE_DIR:-/home/node/.openclaw/workspace/stream-watch/state}
+      STREAM_FRAME_WATCH_CACHE_DIR: ${STREAM_FRAME_WATCH_CACHE_DIR:-/home/node/.openclaw/workspace/stream-watch/cache}
+    volumes:
+      - ${OPENCLAW_DATA_DIR}:/home/node/.openclaw
+      - ./scripts:/opt/openclaw/scripts:ro
+    command: ["sh", "/opt/openclaw/scripts/repair-workspace-permissions.sh"]
+
   openclaw-gateway:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        OPENCLAW_GIT_REF: ${OPENCLAW_GIT_REF:-v2026.4.8}
     image: openclaw-vps:local
     restart: unless-stopped
     init: true
+    depends_on:
+      openclaw-data-permissions:
+        condition: service_completed_successfully
     environment:
       HOME: /home/node
       TERM: xterm-256color
@@ -22,6 +41,7 @@ services:
       WECOM_UPLOAD_CORPID: ${WECOM_UPLOAD_CORPID:-}
       WECOM_UPLOAD_SECRET: ${WECOM_UPLOAD_SECRET:-}
       FFMPEG_BIN: ${FFMPEG_BIN:-}
+      INSPECTION_API_BASE_URL: ${INSPECTION_API_BASE_URL:-http://inspection-api:8080/api}
     logging:
       driver: json-file
       options:
@@ -80,6 +100,7 @@ services:
       WECOM_UPLOAD_CORPID: ${WECOM_UPLOAD_CORPID:-}
       WECOM_UPLOAD_SECRET: ${WECOM_UPLOAD_SECRET:-}
       FFMPEG_BIN: ${FFMPEG_BIN:-}
+      INSPECTION_API_BASE_URL: ${INSPECTION_API_BASE_URL:-http://inspection-api:8080/api}
     logging:
       driver: json-file
       options:
@@ -91,7 +112,7 @@ services:
       - ./config:/opt/openclaw/config:ro
       - ./plugins/stream-frame-watch:/opt/openclaw/plugins/stream-frame-watch:ro
       - ./services/stream-frame-watch:/opt/openclaw/services/stream-frame-watch:ro
-    entrypoint: ["openclaw"]
+    entrypoint: ["node", "/app/dist/index.js"]
     depends_on:
       - openclaw-gateway
 
@@ -119,6 +140,10 @@ services:
     depends_on:
       openclaw-gateway:
         condition: service_healthy
+      inspection-api:
+        condition: service_started
+      inspection-admin:
+        condition: service_started
     logging:
       driver: json-file
       options:
@@ -139,6 +164,44 @@ services:
     ports:
       - "80:80"
       - "443:443"
+
+  inspection-api:
+    build:
+      context: ./inspection-api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      INSPECTION_API_PORT: 8080
+      INSPECTION_DB_DRIVER: ${INSPECTION_DB_DRIVER:-sqlite}
+      INSPECTION_DB_DSN: ${INSPECTION_DB_DSN:-/app/data/inspection-platform.db}
+      INSPECTION_ALLOWED_ORIGINS: ${INSPECTION_ALLOWED_ORIGINS:-https://ai.euzhi.com}
+    volumes:
+      - ${OPENCLAW_DATA_DIR}/inspection-platform:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  inspection-admin:
+    build:
+      context: ./inspection-admin
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      inspection-api:
+        condition: service_started
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   weibo-mcp:
     profiles: ["social"]
@@ -210,12 +273,14 @@ services:
   stream-frame-watch:
     profiles: ["watch"]
     image: openclaw-vps:local
-    user: "0:0"
     restart: unless-stopped
     env_file:
       - ./.env
     depends_on:
-      - openclaw-gateway
+      openclaw-data-permissions:
+        condition: service_completed_successfully
+      openclaw-gateway:
+        condition: service_started
     network_mode: "service:openclaw-gateway"
     environment:
       HOME: /home/node
@@ -236,6 +301,7 @@ services:
       STREAM_FRAME_WATCH_LOOP_SECONDS: ${STREAM_FRAME_WATCH_LOOP_SECONDS:-15}
       STREAM_FRAME_WATCH_STATE_DIR: ${STREAM_FRAME_WATCH_STATE_DIR:-/home/node/.openclaw/workspace/stream-watch/state}
       FFMPEG_BIN: ${FFMPEG_BIN:-}
+      INSPECTION_API_BASE_URL: ${INSPECTION_API_BASE_URL:-http://inspection-api:8080/api}
     volumes:
       - ${OPENCLAW_DATA_DIR}:/home/node/.openclaw
       - ./openclaw.json:/home/node/.openclaw/openclaw.json:ro
@@ -247,9 +313,11 @@ services:
       - ./services/stream-frame-watch:/opt/openclaw/services/stream-frame-watch:ro
     command:
       [
-        "sh",
-        "-lc",
-        "if ! command -v ffmpeg >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update >/tmp/openclaw-watch-apt-update.log 2>&1 && apt-get install -y --no-install-recommends ffmpeg >/tmp/openclaw-watch-apt-install.log 2>&1; fi && exec node /opt/openclaw/services/stream-frame-watch/index.mjs daemon --config /opt/openclaw/config/stream-frame-watch.json"
+        "node",
+        "/opt/openclaw/services/stream-frame-watch/index.mjs",
+        "daemon",
+        "--config",
+        "/opt/openclaw/config/stream-frame-watch.json"
       ]
     logging:
       driver: json-file

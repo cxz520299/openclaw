@@ -50,10 +50,20 @@ ensure_wecom_plugin() {
   rm -rf "${tmp_dir}"
 }
 
+reinstall_wecom_plugin() {
+  plugin_dir="${HOME}/.openclaw/extensions/wecom-openclaw-plugin"
+  plugin_spec="${WECOM_PLUGIN_NPM_SPEC:-@wecom/wecom-openclaw-plugin@1.0.11}"
+
+  echo "Reinstalling WeCom OpenClaw plugin from ${plugin_spec}..."
+  rm -rf "${plugin_dir}"
+  ensure_wecom_plugin
+}
+
 patch_wecom_plugin() {
   plugin_dir="${HOME}/.openclaw/extensions/wecom-openclaw-plugin"
   patch_script="/opt/openclaw/scripts/patch-wecom-plugin.js"
   scene2_upgrade_script="/opt/openclaw/scripts/upgrade-wecom-inspection-scene2.js"
+  dedupe_script="/opt/openclaw/scripts/dedupe-wecom-plugin-helpers.js"
 
   if [ ! -d "${plugin_dir}" ]; then
     echo "WeCom plugin directory not found, skipping patch." >&2
@@ -72,11 +82,64 @@ patch_wecom_plugin() {
   else
     echo "WeCom scene2 upgrade script not found, skipping scene2 upgrade." >&2
   fi
+
+  if [ -f "${dedupe_script}" ]; then
+    node "${dedupe_script}" "${plugin_dir}"
+  else
+    echo "WeCom helper dedupe script not found, skipping helper cleanup." >&2
+  fi
+}
+
+verify_wecom_plugin_patch() {
+  plugin_dir="${HOME}/.openclaw/extensions/wecom-openclaw-plugin"
+  verify_script="/opt/openclaw/scripts/verify-wecom-plugin-patch.js"
+
+  if [ ! -d "${plugin_dir}" ]; then
+    echo "WeCom plugin directory not found, skipping verification." >&2
+    return 0
+  fi
+
+  if [ ! -f "${verify_script}" ]; then
+    echo "WeCom verify script not found, skipping verification." >&2
+    return 0
+  fi
+
+  node "${verify_script}" "${plugin_dir}"
+}
+
+ensure_wecom_plugin_ready() {
+  if [ -z "${WECOM_BOT_ID:-}" ] || [ -z "${WECOM_BOT_SECRET:-}" ]; then
+    ensure_wecom_plugin
+    patch_wecom_plugin
+    return 0
+  fi
+
+  ensure_wecom_plugin
+  patch_wecom_plugin
+  if verify_wecom_plugin_patch; then
+    return 0
+  fi
+
+  echo "WeCom plugin verification failed; retrying with a clean reinstall..." >&2
+  reinstall_wecom_plugin
+  patch_wecom_plugin
+  verify_wecom_plugin_patch
+}
+
+repair_session_files() {
+  repair_script="/opt/openclaw/scripts/repair-session-files.js"
+
+  if [ ! -f "${repair_script}" ]; then
+    echo "Session repair script not found, skipping repair." >&2
+    return 0
+  fi
+
+  node "${repair_script}"
 }
 
 ensure_ffmpeg
-ensure_wecom_plugin
-patch_wecom_plugin
+ensure_wecom_plugin_ready
+repair_session_files
 
 if [ -f /app/dist/index.js ]; then
   exec node /app/dist/index.js gateway --bind lan --port 18789

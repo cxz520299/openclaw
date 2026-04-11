@@ -22,5 +22,9 @@ fi
 tar -xzf "${TARBALL}"
 mv package "${PLUGIN_DIR}"
 
+cd "${PLUGIN_DIR}"
+export npm_config_cache="${npm_config_cache:-/tmp/npm-cache}"
+npm install --omit=dev --silent
+
 echo "REINSTALLED:${TS}"
 sed -n '1,20p' "${PLUGIN_DIR}/package.json"

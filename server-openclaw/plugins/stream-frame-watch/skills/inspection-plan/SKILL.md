@@ -10,6 +10,19 @@ Use this skill when the user provides:
 - one stream URL
 - a short command such as `执行巡检计划`
 
+This skill also covers a database-backed shortcut:
+- one store name such as `成都小智零食有鸣`
+- optionally one plan name such as `营业画面点检` or `门店基准图巡检`
+- allow store aliases such as `成都逮虾户零食有鸣`
+- if the user repeats the store name twice, prefer the store-bound text inspection plan instead of falling back to the baseline plan
+- a short command such as `执行巡检计划`
+- no manual stream URL is required when the store is already mapped in the inspection database
+
+This skill should also accept a bare store-and-plan command:
+- `成都小智零食有鸣 营业画面点检`
+- `成都小智零食有鸣 门店基准图巡检`
+- no extra `执行` verb is required
+
 This skill also covers a second mode:
 - no baseline image
 - one stream URL
@@ -22,6 +35,15 @@ This skill also covers a second mode:
 2. Treat the first stream URL in the message as `source`.
 3. Execute `stream_frame_watch_analyze` immediately instead of asking follow-up questions.
 4. Return the verdict, `差异度`, `相似度`, sampling time, reasons, and artifact paths.
+
+For database-backed inspection:
+1. Treat the mentioned store name as `storeName`.
+2. Treat the mentioned plan name as `planName` when present.
+3. If the user writes the same store text twice, keep the first one as `storeName` and still pass the second one as `planName` so the backend can infer the intended text inspection plan.
+4. Execute `stream_frame_watch_analyze` immediately with `storeName` and `planName`, even if the user only wrote `门店名 + 计划名`.
+5. Let the tool resolve stream URL, thresholds, plan items, and result writeback through the inspection database.
+6. If store or plan cannot be resolved, return the explicit backend miss message. Never silently fall back to an Apple or public sample scene.
+7. Return the verdict, sampled timestamp, reasons, and artifact paths directly.
 
 For textual inspection:
 1. Treat the text after `点检项:` or `描述:` as `descriptionText`.
