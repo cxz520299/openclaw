@@ -36,6 +36,11 @@ const routes = [
     name: "jobs",
     component: () => import("@/views/JobsView.vue"),
   },
+  {
+    path: "/match-logs",
+    name: "match-logs",
+    component: () => import("@/views/MatchLogsView.vue"),
+  },
 ];
 
 export default createRouter({

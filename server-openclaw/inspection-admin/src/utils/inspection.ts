@@ -26,6 +26,33 @@ const textMap: Record<string, string> = {
   violation: "异常",
   none: "无需额外插件",
   consider_detector_plugin: "建议补充识别插件",
+  store_exact: "门店精确命中",
+  store_name_match: "门店名称命中",
+  store_alias_match: "门店别名命中",
+  store_fuzzy: "门店模糊命中",
+  store_id: "门店 ID 命中",
+  store_from_stream: "由监控反查门店",
+  plan_exact: "计划精确命中",
+  plan_name_match: "计划名称命中",
+  plan_alias_match: "计划别名命中",
+  plan_keyword_match: "计划关键词命中",
+  plan_bound_name_match: "门店下计划名称命中",
+  plan_bound_alias_match: "门店下计划别名命中",
+  plan_bound_keyword_match: "门店下计划关键词命中",
+  plan_fuzzy: "计划模糊命中",
+  plan_id: "计划 ID 命中",
+  plan_default: "默认计划",
+  plan_default_binding_priority: "按门店优先级默认计划",
+  stream_exact: "监控精确命中",
+  stream_name_match: "监控名称命中",
+  stream_alias_match: "监控别名命中",
+  stream_source_alias_match: "流地址别名命中",
+  stream_fuzzy: "监控模糊命中",
+  binding_priority: "按优先级选绑定",
+  binding_stream_match: "按监控命中绑定",
+  binding_stream: "绑定默认监控",
+  priority_default: "默认优先级命中",
+  priority_ranked: "优先级排序命中",
 };
 
 function readMapValue(value: string, fallback = "-") {
@@ -54,6 +81,10 @@ export function formatJobStatus(status: string) {
 
 export function formatTriggerType(triggerType: string) {
   return readMapValue(triggerType, triggerType || "未知来源");
+}
+
+export function formatMatchMode(mode: string) {
+  return readMapValue(mode, mode || "未记录");
 }
 
 export function formatClauseType(clauseType: string) {
@@ -151,7 +182,7 @@ export function buildStoreTopology(stores: StoreItem[], streams: StreamItem[], b
     .map((store) => {
       const storeBindings = bindings
         .filter((binding) => binding.storeId === store.id)
-        .sort((left, right) => left.id - right.id);
+        .sort((left, right) => right.priority - left.priority || left.id - right.id);
       const modules = streams
         .filter((stream) => stream.storeId === store.id)
         .sort((left, right) => left.id - right.id)

@@ -104,11 +104,39 @@ type StorePlanBinding struct {
 	Plan                         InspectionPlan `json:"plan"`
 	StreamID                     uint           `json:"streamId"`
 	Stream                       StoreStream    `json:"stream"`
+	Priority                     int            `json:"priority"`
 	CustomMatchThresholdPercent  float64        `json:"customMatchThresholdPercent"`
 	CustomDifferenceThresholdPercent float64    `json:"customDifferenceThresholdPercent"`
 	Enabled                      bool           `json:"enabled"`
 	CreatedAt                    time.Time      `json:"createdAt"`
 	UpdatedAt                    time.Time      `json:"updatedAt"`
+}
+
+type InspectionMatchLog struct {
+	ID                 uint       `json:"id" gorm:"primaryKey"`
+	JobID              *uint      `json:"jobId"`
+	QueryText          string     `json:"queryText"`
+	NormalizedQuery    string     `json:"normalizedQuery"`
+	RequestedStoreName string     `json:"requestedStoreName"`
+	RequestedPlanName  string     `json:"requestedPlanName"`
+	RequestedStreamName string    `json:"requestedStreamName"`
+	RequestedSource    string     `json:"requestedSource"`
+	MatchedStoreID     uint       `json:"matchedStoreId"`
+	MatchedStoreName   string     `json:"matchedStoreName"`
+	MatchedPlanID      uint       `json:"matchedPlanId"`
+	MatchedPlanName    string     `json:"matchedPlanName"`
+	MatchedStreamID    uint       `json:"matchedStreamId"`
+	MatchedStreamName  string     `json:"matchedStreamName"`
+	MatchedBindingID   uint       `json:"matchedBindingId"`
+	StoreMatchMode     string     `json:"storeMatchMode"`
+	PlanMatchMode      string     `json:"planMatchMode"`
+	StreamMatchMode    string     `json:"streamMatchMode"`
+	BindingMatchMode   string     `json:"bindingMatchMode"`
+	ConfidenceScore    int        `json:"confidenceScore"`
+	ConfigVersion      string     `json:"configVersion"`
+	DecisionSummary    string     `json:"decisionSummary"`
+	ErrorMessage       string     `json:"errorMessage"`
+	CreatedAt          time.Time  `json:"createdAt"`
 }
 
 type InspectionJob struct {
@@ -206,7 +234,9 @@ type executeContextRequest struct {
 	StoreName string `json:"storeName"`
 	PlanID    uint   `json:"planId"`
 	PlanName  string `json:"planName"`
+	StreamName string `json:"streamName"`
 	Source    string `json:"source"`
+	RawQuery  string `json:"rawQuery"`
 }
 
 type manualExecutionRequest struct {
@@ -214,7 +244,9 @@ type manualExecutionRequest struct {
 	StoreName          string `json:"storeName"`
 	PlanID             uint   `json:"planId"`
 	PlanName           string `json:"planName"`
+	StreamName         string `json:"streamName"`
 	Source             string `json:"source"`
+	RawQuery           string `json:"rawQuery"`
 	OperatorName       string `json:"operatorName"`
 	OperatorWecomUserID string `json:"operatorWecomUserId"`
 	TriggerType        string `json:"triggerType"`
@@ -244,6 +276,24 @@ type inspectionResultCreateRequest struct {
 	Artifacts                  []InspectionArtifact   `json:"artifacts"`
 }
 
+type matchCandidate struct {
+	Mode        string
+	Score       int
+	Candidate   string
+	Explanation string
+}
+
+type resolveTrace struct {
+	QueryText       string
+	StoreMatch      matchCandidate
+	PlanMatch       matchCandidate
+	StreamMatch     matchCandidate
+	BindingMatch    matchCandidate
+	ConfigVersion   string
+	DecisionSummary string
+	ErrorMessage    string
+}
+
 func main() {
 	cfg := loadConfig()
 	db := mustOpenDatabase(cfg)
@@ -262,6 +312,7 @@ func main() {
 	api := router.Group("/api")
 	{
 		api.GET("/meta/summary", app.getSummary)
+		api.GET("/meta/config-version", app.getConfigVersion)
 
 		api.GET("/stores", app.listStores)
 		api.POST("/stores", app.createStore)
@@ -289,6 +340,7 @@ func main() {
 		api.GET("/inspection-jobs", app.listJobs)
 		api.GET("/inspection-jobs/:id", app.getJob)
 		api.GET("/inspection-results/:id", app.getResult)
+		api.GET("/inspection-match-logs", app.listMatchLogs)
 
 		api.GET("/schedules", app.listSchedules)
 		api.POST("/schedules", app.createSchedule)
@@ -363,6 +415,7 @@ func mustMigrate(db *gorm.DB) {
 		&InspectionResult{},
 		&InspectionResultItem{},
 		&InspectionArtifact{},
+		&InspectionMatchLog{},
 		&Schedule{},
 		&AlertRule{},
 	)
@@ -409,6 +462,7 @@ func mustSeed(db *gorm.DB) {
 		StoreID:                          store.ID,
 		PlanID:                           baselinePlan.ID,
 		StreamID:                         stream.ID,
+		Priority:                         40,
 		CustomDifferenceThresholdPercent: 12,
 		Enabled:                          true,
 	})
@@ -442,6 +496,7 @@ func mustSeed(db *gorm.DB) {
 		StoreID:                     store.ID,
 		PlanID:                      descriptionPlan.ID,
 		StreamID:                    stream.ID,
+		Priority:                    100,
 		CustomMatchThresholdPercent: 75,
 		Enabled:                     true,
 	})
@@ -474,6 +529,7 @@ func mustSeed(db *gorm.DB) {
 		StoreID:                     store.ID,
 		PlanID:                      randomPlan.ID,
 		StreamID:                    stream.ID,
+		Priority:                    70,
 		CustomMatchThresholdPercent: 70,
 		Enabled:                     true,
 	})
@@ -614,6 +670,7 @@ func ensureBinding(db *gorm.DB, payload StorePlanBinding) {
 	}
 	if err := db.Model(&item).Updates(map[string]interface{}{
 		"stream_id":                            payload.StreamID,
+		"priority":                             payload.Priority,
 		"custom_match_threshold_percent":       payload.CustomMatchThresholdPercent,
 		"custom_difference_threshold_percent":  payload.CustomDifferenceThresholdPercent,
 		"enabled":                              payload.Enabled,
@@ -704,6 +761,10 @@ func (app *App) getSummary(ctx *gin.Context) {
 		"jobs":     jobs,
 		"results":  results,
 	})
+}
+
+func (app *App) getConfigVersion(ctx *gin.Context) {
+	success(ctx, gin.H{"version": app.currentConfigVersion()})
 }
 
 func (app *App) listStores(ctx *gin.Context) {
@@ -937,7 +998,7 @@ func (app *App) updatePlanItem(ctx *gin.Context) {
 
 func (app *App) listBindings(ctx *gin.Context) {
 	var items []StorePlanBinding
-	if err := app.db.Preload("Store").Preload("Plan").Preload("Stream").Order("updated_at desc").Find(&items).Error; err != nil {
+	if err := app.db.Preload("Store").Preload("Plan").Preload("Stream").Order("priority desc, updated_at desc").Find(&items).Error; err != nil {
 		fail(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -949,6 +1010,9 @@ func (app *App) createBinding(ctx *gin.Context) {
 	if err := ctx.ShouldBindJSON(&payload); err != nil {
 		fail(ctx, http.StatusBadRequest, err.Error())
 		return
+	}
+	if payload.Priority == 0 {
+		payload.Priority = 100
 	}
 	if err := app.db.Create(&payload).Error; err != nil {
 		fail(ctx, http.StatusInternalServerError, err.Error())
@@ -974,6 +1038,7 @@ func (app *App) updateBinding(ctx *gin.Context) {
 		"store_id": payload.StoreID,
 		"plan_id": payload.PlanID,
 		"stream_id": payload.StreamID,
+		"priority": payload.Priority,
 		"custom_match_threshold_percent": payload.CustomMatchThresholdPercent,
 		"custom_difference_threshold_percent": payload.CustomDifferenceThresholdPercent,
 		"enabled": payload.Enabled,
@@ -1021,6 +1086,41 @@ func (app *App) getResult(ctx *gin.Context) {
 		return
 	}
 	success(ctx, item)
+}
+
+func (app *App) listMatchLogs(ctx *gin.Context) {
+	limit := 100
+	if rawLimit := strings.TrimSpace(ctx.Query("limit")); rawLimit != "" {
+		if parsed, err := strconv.Atoi(rawLimit); err == nil && parsed > 0 && parsed <= 500 {
+			limit = parsed
+		}
+	}
+	var items []InspectionMatchLog
+	db := app.db.Order("created_at desc").Limit(limit)
+	if jobIDText := strings.TrimSpace(ctx.Query("jobId")); jobIDText != "" {
+		if jobID, err := strconv.ParseUint(jobIDText, 10, 64); err == nil && jobID > 0 {
+			db = db.Where("job_id = ?", jobID)
+		}
+	}
+	query := strings.TrimSpace(ctx.Query("query"))
+	if query != "" {
+		pattern := "%" + query + "%"
+		db = db.Where(
+			"query_text LIKE ? OR requested_store_name LIKE ? OR requested_plan_name LIKE ? OR requested_stream_name LIKE ? OR matched_store_name LIKE ? OR matched_plan_name LIKE ? OR matched_stream_name LIKE ?",
+			pattern,
+			pattern,
+			pattern,
+			pattern,
+			pattern,
+			pattern,
+			pattern,
+		)
+	}
+	if err := db.Find(&items).Error; err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+	success(ctx, items)
 }
 
 func (app *App) listSchedules(ctx *gin.Context) {
@@ -1078,18 +1178,21 @@ func (app *App) executeContext(ctx *gin.Context) {
 		fail(ctx, http.StatusBadRequest, err.Error())
 		return
 	}
-	store, plan, binding, stream, items, alertRule, err := app.resolveExecutionContext(req)
+	store, plan, binding, stream, items, alertRule, trace, err := app.resolveExecutionContext(req)
 	if err != nil {
+		app.writeMatchLog(req, trace, nil, nil, nil, nil, nil)
 		fail(ctx, http.StatusNotFound, err.Error())
 		return
 	}
+	app.writeMatchLog(req, trace, &store, &plan, &stream, &binding, nil)
 	success(ctx, gin.H{
-		"store": store,
-		"stream": stream,
-		"plan": plan,
-		"items": items,
-		"binding": binding,
+		"store":     store,
+		"stream":    stream,
+		"plan":      plan,
+		"items":     items,
+		"binding":   binding,
 		"alertRule": alertRule,
+		"trace":     trace,
 	})
 }
 
@@ -1099,14 +1202,18 @@ func (app *App) createManualExecution(ctx *gin.Context) {
 		fail(ctx, http.StatusBadRequest, err.Error())
 		return
 	}
-	store, plan, binding, stream, items, alertRule, err := app.resolveExecutionContext(executeContextRequest{
-		StoreID: req.StoreID,
-		StoreName: req.StoreName,
-		PlanID:  req.PlanID,
-		PlanName: req.PlanName,
-		Source: req.Source,
-	})
+	contextReq := executeContextRequest{
+		StoreID:    req.StoreID,
+		StoreName:  req.StoreName,
+		PlanID:     req.PlanID,
+		PlanName:   req.PlanName,
+		StreamName: req.StreamName,
+		Source:     req.Source,
+		RawQuery:   req.RawQuery,
+	}
+	store, plan, binding, stream, items, alertRule, trace, err := app.resolveExecutionContext(contextReq)
 	if err != nil {
+		app.writeMatchLog(contextReq, trace, nil, nil, nil, nil, nil)
 		fail(ctx, http.StatusNotFound, err.Error())
 		return
 	}
@@ -1126,13 +1233,15 @@ func (app *App) createManualExecution(ctx *gin.Context) {
 		fail(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
+	app.writeMatchLog(contextReq, trace, &store, &plan, &stream, &binding, &job.ID)
 	success(ctx, gin.H{
-		"job": job,
-		"store": store,
-		"stream": stream,
-		"plan": plan,
-		"items": items,
+		"job":       job,
+		"store":     store,
+		"stream":    stream,
+		"plan":      plan,
+		"items":     items,
 		"alertRule": alertRule,
+		"trace":     trace,
 	})
 }
 
@@ -1208,69 +1317,136 @@ func (app *App) createInspectionResult(ctx *gin.Context) {
 	success(ctx, result)
 }
 
-func (app *App) resolveExecutionContext(req executeContextRequest) (Store, InspectionPlan, StorePlanBinding, StoreStream, []InspectionPlanItem, AlertRule, error) {
+func (app *App) resolveExecutionContext(req executeContextRequest) (Store, InspectionPlan, StorePlanBinding, StoreStream, []InspectionPlanItem, AlertRule, resolveTrace, error) {
 	var store Store
 	var plan InspectionPlan
+	var stream StoreStream
+	trace := resolveTrace{
+		QueryText:     composeMatchQuery(req),
+		ConfigVersion: app.currentConfigVersion(),
+	}
 	planQuery := strings.TrimSpace(req.PlanName)
+	sourceQuery := strings.TrimSpace(req.Source)
+	streamQuery := strings.TrimSpace(req.StreamName)
+	if streamQuery == "" {
+		streamQuery = sourceQuery
+	}
 
 	if req.StoreID > 0 {
 		if err := app.db.First(&store, req.StoreID).Error; err != nil {
-			return Store{}, InspectionPlan{}, StorePlanBinding{}, StoreStream{}, nil, AlertRule{}, errors.New("门店不存在")
+			trace.ErrorMessage = "门店不存在"
+			return Store{}, InspectionPlan{}, StorePlanBinding{}, StoreStream{}, nil, AlertRule{}, trace, errors.New("门店不存在")
+		}
+		trace.StoreMatch = matchCandidate{
+			Mode:        "store_id",
+			Score:       1300,
+			Candidate:   strconv.FormatUint(uint64(req.StoreID), 10),
+			Explanation: fmt.Sprintf("通过 storeId=%d 命中门店「%s」", req.StoreID, store.Name),
 		}
 	} else if strings.TrimSpace(req.StoreName) != "" {
-		resolvedStore, err := app.findStoreByNameLike(strings.TrimSpace(req.StoreName))
+		resolvedStore, match, err := app.findStoreByNameLike(strings.TrimSpace(req.StoreName))
 		if err != nil {
-			return Store{}, InspectionPlan{}, StorePlanBinding{}, StoreStream{}, nil, AlertRule{}, err
+			trace.ErrorMessage = err.Error()
+			return Store{}, InspectionPlan{}, StorePlanBinding{}, StoreStream{}, nil, AlertRule{}, trace, err
 		}
 		store = resolvedStore
+		trace.StoreMatch = match
 	} else if strings.TrimSpace(req.Source) != "" {
-		var stream StoreStream
-		err := app.db.Preload("Store").Where("stream_url = ? OR source_alias = ?", strings.TrimSpace(req.Source), strings.TrimSpace(req.Source)).First(&stream).Error
+		resolvedStream, match, err := app.findStreamBySourceQuery(sourceQuery, 0)
 		if err != nil {
-			return Store{}, InspectionPlan{}, StorePlanBinding{}, StoreStream{}, nil, AlertRule{}, errors.New("未找到对应流媒体")
+			trace.ErrorMessage = "未找到对应流媒体"
+			return Store{}, InspectionPlan{}, StorePlanBinding{}, StoreStream{}, nil, AlertRule{}, trace, errors.New("未找到对应流媒体")
 		}
+		stream = resolvedStream
+		trace.StreamMatch = match
 		store = stream.Store
+		trace.StoreMatch = matchCandidate{
+			Mode:        "store_from_stream",
+			Score:       match.Score,
+			Candidate:   stream.Name,
+			Explanation: fmt.Sprintf("通过监控模块「%s」反查门店「%s」", stream.Name, store.Name),
+		}
 	}
 
 	if req.PlanID > 0 {
 		if err := app.db.First(&plan, req.PlanID).Error; err != nil {
-			return Store{}, InspectionPlan{}, StorePlanBinding{}, StoreStream{}, nil, AlertRule{}, errors.New("巡检计划不存在")
+			trace.ErrorMessage = "巡检计划不存在"
+			return Store{}, InspectionPlan{}, StorePlanBinding{}, StoreStream{}, nil, AlertRule{}, trace, errors.New("巡检计划不存在")
+		}
+		trace.PlanMatch = matchCandidate{
+			Mode:        "plan_id",
+			Score:       1300,
+			Candidate:   strconv.FormatUint(uint64(req.PlanID), 10),
+			Explanation: fmt.Sprintf("通过 planId=%d 命中计划「%s」", req.PlanID, plan.Name),
 		}
 	} else if planQuery != "" {
 		if store.ID > 0 {
-			resolvedPlan, err := app.findPlanForStore(store, planQuery, strings.TrimSpace(req.StoreName))
+			resolvedPlan, match, err := app.findPlanForStore(store, planQuery, strings.TrimSpace(req.StoreName))
 			if err != nil {
-				return Store{}, InspectionPlan{}, StorePlanBinding{}, StoreStream{}, nil, AlertRule{}, err
+				trace.ErrorMessage = err.Error()
+				return Store{}, InspectionPlan{}, StorePlanBinding{}, StoreStream{}, nil, AlertRule{}, trace, err
 			}
 			plan = resolvedPlan
+			trace.PlanMatch = match
 		} else {
-			resolvedPlan, err := app.findPlanByNameLike(planQuery)
+			resolvedPlan, match, err := app.findPlanByNameLike(planQuery)
 			if err != nil {
-				return Store{}, InspectionPlan{}, StorePlanBinding{}, StoreStream{}, nil, AlertRule{}, err
+				trace.ErrorMessage = err.Error()
+				return Store{}, InspectionPlan{}, StorePlanBinding{}, StoreStream{}, nil, AlertRule{}, trace, err
 			}
 			plan = resolvedPlan
+			trace.PlanMatch = match
 		}
 	} else {
-		if err := app.db.Where("enabled = ?", true).Order("id asc").First(&plan).Error; err != nil {
-			return Store{}, InspectionPlan{}, StorePlanBinding{}, StoreStream{}, nil, AlertRule{}, errors.New("没有可用巡检计划")
+		if store.ID > 0 {
+			defaultBinding, err := app.findDefaultBindingForStore(store.ID)
+			if err != nil {
+				trace.ErrorMessage = "没有可用巡检计划"
+				return Store{}, InspectionPlan{}, StorePlanBinding{}, StoreStream{}, nil, AlertRule{}, trace, errors.New("没有可用巡检计划")
+			}
+			plan = defaultBinding.Plan
+			trace.PlanMatch = matchCandidate{
+				Mode:        "plan_default_binding_priority",
+				Score:       300 + defaultBinding.Priority,
+				Candidate:   plan.Name,
+				Explanation: fmt.Sprintf("未显式传计划，按门店绑定优先级默认使用「%s」", plan.Name),
+			}
+		} else if err := app.db.Where("enabled = ?", true).Order("id asc").First(&plan).Error; err != nil {
+			trace.ErrorMessage = "没有可用巡检计划"
+			return Store{}, InspectionPlan{}, StorePlanBinding{}, StoreStream{}, nil, AlertRule{}, trace, errors.New("没有可用巡检计划")
+		} else {
+			trace.PlanMatch = matchCandidate{
+				Mode:        "plan_default",
+				Score:       100,
+				Candidate:   plan.Name,
+				Explanation: fmt.Sprintf("未显式传计划，默认使用「%s」", plan.Name),
+			}
 		}
 	}
 
-	var binding StorePlanBinding
-	err := app.db.Preload("Store").Preload("Plan").Preload("Stream").Where("store_id = ? AND plan_id = ? AND enabled = ?", store.ID, plan.ID, true).First(&binding).Error
-	if err != nil && strings.TrimSpace(req.Source) != "" {
-		err = app.db.Preload("Store").Preload("Plan").Preload("Stream").
-			Joins("JOIN store_streams ON store_streams.id = store_plan_bindings.stream_id").
-			Where("store_plan_bindings.plan_id = ? AND store_plan_bindings.enabled = ? AND (store_streams.stream_url = ? OR store_streams.source_alias = ?)", plan.ID, true, strings.TrimSpace(req.Source), strings.TrimSpace(req.Source)).
-			First(&binding).Error
-	}
+	binding, bindingMatch, err := app.findBindingForExecution(store, plan, streamQuery)
 	if err != nil {
-		return Store{}, InspectionPlan{}, StorePlanBinding{}, StoreStream{}, nil, AlertRule{}, errors.New("门店未绑定对应巡检计划")
+		trace.BindingMatch = bindingMatch
+		trace.ErrorMessage = err.Error()
+		return Store{}, InspectionPlan{}, StorePlanBinding{}, StoreStream{}, nil, AlertRule{}, trace, err
+	}
+	trace.BindingMatch = bindingMatch
+	if stream.ID == 0 {
+		stream = binding.Stream
+	}
+	if trace.StreamMatch.Mode == "" {
+		trace.StreamMatch = matchCandidate{
+			Mode:        "binding_stream",
+			Score:       bindingMatch.Score,
+			Candidate:   binding.Stream.Name,
+			Explanation: fmt.Sprintf("执行监控模块使用绑定结果「%s」", binding.Stream.Name),
+		}
 	}
 
 	var items []InspectionPlanItem
 	if err := app.db.Where("plan_id = ? AND enabled = ?", plan.ID, true).Order("sort_order asc, id asc").Find(&items).Error; err != nil {
-		return Store{}, InspectionPlan{}, StorePlanBinding{}, StoreStream{}, nil, AlertRule{}, err
+		trace.ErrorMessage = err.Error()
+		return Store{}, InspectionPlan{}, StorePlanBinding{}, StoreStream{}, nil, AlertRule{}, trace, err
 	}
 
 	var alertRule AlertRule
@@ -1283,7 +1459,17 @@ func (app *App) resolveExecutionContext(req executeContextRequest) (Store, Inspe
 		plan.DifferenceThresholdPercent = binding.CustomDifferenceThresholdPercent
 	}
 
-	return binding.Store, plan, binding, binding.Stream, items, alertRule, nil
+	trace.DecisionSummary = fmt.Sprintf(
+		"门店命中=%s；计划命中=%s；监控命中=%s；最终执行=%s / %s / %s",
+		valueOr(trace.StoreMatch.Explanation, "未记录"),
+		valueOr(trace.PlanMatch.Explanation, "未记录"),
+		valueOr(trace.StreamMatch.Explanation, "未记录"),
+		binding.Store.Name,
+		binding.Plan.Name,
+		binding.Stream.Name,
+	)
+
+	return binding.Store, plan, binding, binding.Stream, items, alertRule, trace, nil
 }
 
 func valueOr(value string, fallback string) string {
@@ -1332,6 +1518,19 @@ func splitLookupValues(raw string) []string {
 		}
 	})
 	return dedupeLookupValues(parts)
+}
+
+func composeMatchQuery(req executeContextRequest) string {
+	if strings.TrimSpace(req.RawQuery) != "" {
+		return strings.TrimSpace(req.RawQuery)
+	}
+	parts := []string{
+		strings.TrimSpace(req.StoreName),
+		strings.TrimSpace(req.PlanName),
+		strings.TrimSpace(req.StreamName),
+		strings.TrimSpace(req.Source),
+	}
+	return strings.Join(dedupeLookupValues(parts), " | ")
 }
 
 func expandAliasCandidates(value string, aliasMap map[string][]string) []string {
@@ -1456,6 +1655,12 @@ func planLookupCandidates(plan InspectionPlan) []string {
 	return dedupeLookupValues(values)
 }
 
+func streamLookupCandidates(stream StoreStream) []string {
+	values := []string{stream.Name, stream.StreamURL, stream.SourceAlias}
+	values = append(values, splitLookupValues(stream.AliasList)...)
+	return dedupeLookupValues(values)
+}
+
 func containsInspectionKeywords(value string) bool {
 	normalized := normalizeLookupToken(value)
 	if normalized == "" {
@@ -1481,22 +1686,180 @@ func formatNameList(values []string) string {
 	return strings.Join(items, "、")
 }
 
-func (app *App) findStoreByNameLike(name string) (Store, error) {
+func bestConfidence(values ...int) int {
+	best := 0
+	for _, value := range values {
+		if value > best {
+			best = value
+		}
+	}
+	return best
+}
+
+func maxInt(left int, right int) int {
+	if left > right {
+		return left
+	}
+	return right
+}
+
+func modeForScore(score int) string {
+	switch {
+	case score >= 1000:
+		return "exact"
+	case score >= 800:
+		return "contains"
+	case score >= 500:
+		return "reverse_contains"
+	case score >= 260:
+		return "fuzzy"
+	default:
+		return ""
+	}
+}
+
+func bestLookupMatch(query string, candidates []string) matchCandidate {
+	best := matchCandidate{}
+	for _, candidate := range candidates {
+		score := scoreLookupCandidate(query, candidate)
+		if score > best.Score {
+			best = matchCandidate{
+				Mode:        modeForScore(score),
+				Score:       score,
+				Candidate:   candidate,
+				Explanation: fmt.Sprintf("命中候选词：%s", candidate),
+			}
+		}
+	}
+	if best.Mode == "" && strings.TrimSpace(query) == "" {
+		best.Mode = "not_provided"
+		best.Explanation = "未提供该维度的命中条件"
+	}
+	return best
+}
+
+func (app *App) findStreamForStoreByQuery(storeID uint, query string) (StoreStream, matchCandidate, error) {
+	text := strings.TrimSpace(query)
+	if text == "" {
+		return StoreStream{}, matchCandidate{Mode: "not_provided", Explanation: "未指定监控模块"}, errors.New("监控模块名称不能为空")
+	}
+
+	var streams []StoreStream
+	if err := app.db.Where("store_id = ? AND enabled = ?", storeID, true).Find(&streams).Error; err != nil {
+		return StoreStream{}, matchCandidate{}, err
+	}
+	bestScore := 0
+	var best StoreStream
+	var bestMatch matchCandidate
+	for _, stream := range streams {
+		match := bestLookupMatch(text, streamLookupCandidates(stream))
+		if match.Score > bestScore {
+			bestScore = match.Score
+			best = stream
+			bestMatch = match
+		}
+	}
+	if best.ID > 0 && bestScore >= 260 {
+		return best, bestMatch, nil
+	}
+	streamNames := make([]string, 0, len(streams))
+	for _, stream := range streams {
+		streamNames = append(streamNames, stream.Name)
+	}
+	return StoreStream{}, bestMatch, fmt.Errorf("未命中监控模块「%s」，当前可用模块: %s", text, formatNameList(streamNames))
+}
+
+func (app *App) findBestBinding(store Store, plan InspectionPlan, sourceQuery string, streamNameQuery string) (StorePlanBinding, matchCandidate, matchCandidate, error) {
+	var bindings []StorePlanBinding
+	if err := app.db.Preload("Store").Preload("Plan").Preload("Stream").
+		Where("store_id = ? AND plan_id = ? AND enabled = ?", store.ID, plan.ID, true).
+		Order("priority desc, updated_at desc, id asc").
+		Find(&bindings).Error; err != nil {
+		return StorePlanBinding{}, matchCandidate{}, matchCandidate{}, err
+	}
+	if len(bindings) == 0 {
+		return StorePlanBinding{}, matchCandidate{}, matchCandidate{}, errors.New("门店未绑定对应巡检计划")
+	}
+
+	sourceText := strings.TrimSpace(sourceQuery)
+	streamText := strings.TrimSpace(streamNameQuery)
+	if sourceText == "" && streamText == "" {
+		selected := bindings[0]
+		return selected,
+			matchCandidate{Mode: "priority_default", Score: 300 + maxInt(selected.Priority, 0), Candidate: selected.Stream.Name, Explanation: "未指定监控模块，按绑定优先级命中"},
+			matchCandidate{Mode: "priority_default", Score: 300 + maxInt(selected.Priority, 0), Candidate: strconv.Itoa(selected.Priority), Explanation: fmt.Sprintf("采用绑定优先级 %d", selected.Priority)},
+			nil
+	}
+
+	bestScore := -1
+	var best StorePlanBinding
+	var bestStreamMatch matchCandidate
+	var bestBindingMatch matchCandidate
+	for _, binding := range bindings {
+		streamMatch := matchCandidate{}
+		if sourceText != "" {
+			streamMatch = bestLookupMatch(sourceText, streamLookupCandidates(binding.Stream))
+		}
+		if streamText != "" {
+			nameMatch := bestLookupMatch(streamText, streamLookupCandidates(binding.Stream))
+			if nameMatch.Score > streamMatch.Score {
+				streamMatch = nameMatch
+			}
+		}
+		score := streamMatch.Score
+		if score > 0 {
+			score += maxInt(binding.Priority, 0)
+		}
+		if score > bestScore {
+			bestScore = score
+			best = binding
+			bestStreamMatch = streamMatch
+			bestBindingMatch = matchCandidate{
+				Mode:        "priority_ranked",
+				Score:       300 + maxInt(binding.Priority, 0),
+				Candidate:   strconv.Itoa(binding.Priority),
+				Explanation: fmt.Sprintf("绑定优先级 %d", binding.Priority),
+			}
+		}
+	}
+
+	if best.ID > 0 && bestStreamMatch.Score >= 260 {
+		return best, bestStreamMatch, bestBindingMatch, nil
+	}
+
+	streamNames := make([]string, 0, len(bindings))
+	for _, binding := range bindings {
+		streamNames = append(streamNames, binding.Stream.Name)
+	}
+	queryText := streamText
+	if queryText == "" {
+		queryText = sourceText
+	}
+	return StorePlanBinding{}, bestStreamMatch, bestBindingMatch, fmt.Errorf("门店「%s」计划「%s」未命中监控模块「%s」，当前可用模块: %s", store.Name, plan.Name, queryText, formatNameList(streamNames))
+}
+
+func (app *App) findStoreByNameLike(name string) (Store, matchCandidate, error) {
 	query := strings.TrimSpace(name)
 	if query == "" {
-		return Store{}, errors.New("门店名称不能为空")
+		return Store{}, matchCandidate{}, errors.New("门店名称不能为空")
 	}
 	var exact Store
 	if err := app.db.Where("name = ? OR code = ?", query, query).First(&exact).Error; err == nil {
-		return exact, nil
+		return exact, matchCandidate{
+			Mode:        "store_exact",
+			Score:       1200,
+			Candidate:   query,
+			Explanation: fmt.Sprintf("门店按名称/编码精确命中「%s」", exact.Name),
+		}, nil
 	}
 
 	var stores []Store
 	if err := app.db.Find(&stores).Error; err != nil {
-		return Store{}, err
+		return Store{}, matchCandidate{}, err
 	}
 	bestScore := 0
 	var best Store
+	bestValue := ""
 	queryCandidates := expandAliasCandidates(query, storeAliasMap)
 	for _, store := range stores {
 		candidates := storeLookupCandidates(store)
@@ -1506,92 +1869,150 @@ func (app *App) findStoreByNameLike(name string) (Store, error) {
 				if score > bestScore {
 					bestScore = score
 					best = store
+					bestValue = candidate
 				}
 			}
 		}
 	}
 	if best.ID > 0 && bestScore >= 500 {
-		return best, nil
+		mode := "store_fuzzy"
+		if normalizeLookupToken(bestValue) == normalizeLookupToken(best.Name) {
+			mode = "store_name_match"
+		} else if slices := splitLookupValues(best.AliasList); len(slices) > 0 {
+			for _, alias := range slices {
+				if normalizeLookupToken(alias) == normalizeLookupToken(bestValue) {
+					mode = "store_alias_match"
+					break
+				}
+			}
+		}
+		return best, matchCandidate{
+			Mode:        mode,
+			Score:       bestScore,
+			Candidate:   bestValue,
+			Explanation: fmt.Sprintf("门店通过「%s」命中「%s」", bestValue, best.Name),
+		}, nil
 	}
 	storeNames := make([]string, 0, len(stores))
 	for _, store := range stores {
 		storeNames = append(storeNames, store.Name)
 	}
-	return Store{}, fmt.Errorf("未命中门店「%s」，当前可用门店: %s", query, formatNameList(storeNames))
+	return Store{}, matchCandidate{}, fmt.Errorf("未命中门店「%s」，当前可用门店: %s", query, formatNameList(storeNames))
 }
 
-func (app *App) findPlanByNameExact(name string) (InspectionPlan, error) {
+func (app *App) findPlanByNameExact(name string) (InspectionPlan, matchCandidate, error) {
 	query := strings.TrimSpace(name)
 	if query == "" {
-		return InspectionPlan{}, errors.New("巡检计划名称不能为空")
+		return InspectionPlan{}, matchCandidate{}, errors.New("巡检计划名称不能为空")
 	}
 
 	var exact InspectionPlan
 	if err := app.db.Where("enabled = ? AND (name = ? OR code = ?)", true, query, query).First(&exact).Error; err == nil {
-		return exact, nil
+		return exact, matchCandidate{
+			Mode:        "plan_exact",
+			Score:       1200,
+			Candidate:   query,
+			Explanation: fmt.Sprintf("计划按名称/编码精确命中「%s」", exact.Name),
+		}, nil
 	}
 
 	var plans []InspectionPlan
 	if err := app.db.Where("enabled = ?", true).Find(&plans).Error; err != nil {
-		return InspectionPlan{}, err
+		return InspectionPlan{}, matchCandidate{}, err
 	}
 
 	normalizedQuery := normalizeLookupToken(query)
 	for _, candidate := range plans {
 		for _, lookup := range planLookupCandidates(candidate) {
 			if normalizeLookupToken(lookup) == normalizedQuery && normalizedQuery != "" {
-				return candidate, nil
+				mode := "plan_alias_match"
+				if normalizeLookupToken(lookup) == normalizeLookupToken(candidate.Name) {
+					mode = "plan_name_match"
+				}
+				return candidate, matchCandidate{
+					Mode:        mode,
+					Score:       1000,
+					Candidate:   lookup,
+					Explanation: fmt.Sprintf("计划通过「%s」精确命中「%s」", lookup, candidate.Name),
+				}, nil
 			}
 		}
 	}
 
-	return InspectionPlan{}, gorm.ErrRecordNotFound
+	return InspectionPlan{}, matchCandidate{}, gorm.ErrRecordNotFound
 }
 
-func (app *App) findPlanByNameLike(name string) (InspectionPlan, error) {
+func (app *App) findPlanByNameLike(name string) (InspectionPlan, matchCandidate, error) {
 	query := strings.TrimSpace(name)
 	if query == "" {
-		return InspectionPlan{}, errors.New("巡检计划名称不能为空")
+		return InspectionPlan{}, matchCandidate{}, errors.New("巡检计划名称不能为空")
 	}
 
-	if exact, err := app.findPlanByNameExact(query); err == nil {
-		return exact, nil
+	if exact, trace, err := app.findPlanByNameExact(query); err == nil {
+		return exact, trace, nil
 	}
 
 	var plans []InspectionPlan
 	if err := app.db.Where("enabled = ?", true).Find(&plans).Error; err != nil {
-		return InspectionPlan{}, err
+		return InspectionPlan{}, matchCandidate{}, err
 	}
 	bestScore := 0
 	var best InspectionPlan
+	bestValue := ""
 	for _, candidate := range plans {
 		score := 0
+		candidateValue := ""
 		for _, lookup := range planLookupCandidates(candidate) {
 			candidateScore := scoreLookupCandidate(query, lookup)
 			if candidateScore > score {
 				score = candidateScore
+				candidateValue = lookup
 			}
 		}
 		if score > bestScore {
 			bestScore = score
 			best = candidate
+			bestValue = candidateValue
 		}
 	}
-	if best.ID > 0 && bestScore >= 260 {
-		return best, nil
+	if best.ID > 0 && bestScore >= 500 {
+		mode := "plan_fuzzy"
+		for _, keyword := range splitLookupValues(best.TriggerKeywords) {
+			if normalizeLookupToken(keyword) == normalizeLookupToken(bestValue) {
+				mode = "plan_keyword_match"
+				break
+			}
+		}
+		if mode == "plan_fuzzy" {
+			for _, alias := range splitLookupValues(best.AliasList) {
+				if normalizeLookupToken(alias) == normalizeLookupToken(bestValue) {
+					mode = "plan_alias_match"
+					break
+				}
+			}
+		}
+		if mode == "plan_fuzzy" && normalizeLookupToken(bestValue) == normalizeLookupToken(best.Name) {
+			mode = "plan_name_match"
+		}
+		return best, matchCandidate{
+			Mode:        mode,
+			Score:       bestScore,
+			Candidate:   bestValue,
+			Explanation: fmt.Sprintf("计划通过「%s」命中「%s」", bestValue, best.Name),
+		}, nil
 	}
 
 	planNames := make([]string, 0, len(plans))
 	for _, candidate := range plans {
 		planNames = append(planNames, candidate.Name)
 	}
-	return InspectionPlan{}, fmt.Errorf("未命中巡检计划「%s」，当前可用计划: %s", query, formatNameList(planNames))
+	return InspectionPlan{}, matchCandidate{}, fmt.Errorf("未命中巡检计划「%s」，当前可用计划: %s", query, formatNameList(planNames))
 }
 
 func (app *App) listBoundPlans(storeID uint) ([]InspectionPlan, error) {
 	var plans []InspectionPlan
 	err := app.db.Model(&InspectionPlan{}).
-		Distinct("inspection_plans.id, inspection_plans.name, inspection_plans.code, inspection_plans.plan_type, inspection_plans.description, inspection_plans.frame_pick_mode, inspection_plans.match_threshold_percent, inspection_plans.difference_threshold_percent, inspection_plans.enabled, inspection_plans.created_at, inspection_plans.updated_at").
+		Distinct("inspection_plans.id, inspection_plans.name, inspection_plans.code, inspection_plans.alias_list, inspection_plans.trigger_keywords, inspection_plans.plan_type, inspection_plans.description, inspection_plans.frame_pick_mode, inspection_plans.match_threshold_percent, inspection_plans.difference_threshold_percent, inspection_plans.enabled, inspection_plans.created_at, inspection_plans.updated_at").
 		Joins("JOIN store_plan_bindings ON store_plan_bindings.plan_id = inspection_plans.id AND store_plan_bindings.enabled = ?", true).
 		Where("store_plan_bindings.store_id = ? AND inspection_plans.enabled = ?", storeID, true).
 		Order("inspection_plans.id ASC").
@@ -1603,74 +2024,276 @@ func (app *App) findBindingByStoreAndPlan(storeID uint, planID uint) (StorePlanB
 	var binding StorePlanBinding
 	err := app.db.Preload("Store").Preload("Plan").Preload("Stream").
 		Where("store_id = ? AND plan_id = ? AND enabled = ?", storeID, planID, true).
+		Order("priority desc, updated_at desc, id asc").
 		First(&binding).Error
 	return binding, err
 }
 
-func (app *App) findPlanForStore(store Store, requestedPlanName string, requestedStoreName string) (InspectionPlan, error) {
-	query := strings.TrimSpace(requestedPlanName)
-	if query == "" {
-		return InspectionPlan{}, errors.New("巡检计划名称不能为空")
+func (app *App) findDefaultBindingForStore(storeID uint) (StorePlanBinding, error) {
+	var binding StorePlanBinding
+	err := app.db.Preload("Store").Preload("Plan").Preload("Stream").
+		Where("store_id = ? AND enabled = ?", storeID, true).
+		Order("priority desc, updated_at desc, id asc").
+		First(&binding).Error
+	return binding, err
+}
+
+func (app *App) findStreamBySourceQuery(query string, storeID uint) (StoreStream, matchCandidate, error) {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return StoreStream{}, matchCandidate{}, errors.New("监控模块查询不能为空")
+	}
+	db := app.db.Preload("Store").Where("enabled = ?", true)
+	if storeID > 0 {
+		db = db.Where("store_id = ?", storeID)
 	}
 
-	if exactPlan, err := app.findPlanByNameExact(query); err == nil {
-		if _, bindingErr := app.findBindingByStoreAndPlan(store.ID, exactPlan.ID); bindingErr == nil {
-			return exactPlan, nil
+	var exact StoreStream
+	if err := db.Where("stream_url = ? OR source_alias = ? OR name = ?", trimmed, trimmed, trimmed).First(&exact).Error; err == nil {
+		return exact, matchCandidate{
+			Mode:        "stream_exact",
+			Score:       1200,
+			Candidate:   trimmed,
+			Explanation: fmt.Sprintf("监控模块按流地址/名称精确命中「%s」", exact.Name),
+		}, nil
+	}
+
+	var streams []StoreStream
+	if err := db.Find(&streams).Error; err != nil {
+		return StoreStream{}, matchCandidate{}, err
+	}
+	bestScore := 0
+	var best StoreStream
+	bestValue := ""
+	for _, stream := range streams {
+		for _, candidate := range streamLookupCandidates(stream) {
+			score := scoreLookupCandidate(trimmed, candidate)
+			if score > bestScore {
+				bestScore = score
+				best = stream
+				bestValue = candidate
+			}
 		}
-		return InspectionPlan{}, fmt.Errorf("门店「%s」未绑定巡检计划「%s」，请先在后台绑定后再执行", store.Name, exactPlan.Name)
+	}
+	if best.ID > 0 && bestScore >= 500 {
+		mode := "stream_fuzzy"
+		if normalizeLookupToken(bestValue) == normalizeLookupToken(best.Name) {
+			mode = "stream_name_match"
+		}
+		for _, alias := range splitLookupValues(best.AliasList) {
+			if normalizeLookupToken(alias) == normalizeLookupToken(bestValue) {
+				mode = "stream_alias_match"
+				break
+			}
+		}
+		if mode == "stream_fuzzy" && normalizeLookupToken(bestValue) == normalizeLookupToken(best.SourceAlias) {
+			mode = "stream_source_alias_match"
+		}
+		return best, matchCandidate{
+			Mode:        mode,
+			Score:       bestScore,
+			Candidate:   bestValue,
+			Explanation: fmt.Sprintf("监控模块通过「%s」命中「%s」", bestValue, best.Name),
+		}, nil
+	}
+	return StoreStream{}, matchCandidate{}, fmt.Errorf("未命中监控模块/流地址「%s」", trimmed)
+}
+
+func (app *App) findBindingForExecution(store Store, plan InspectionPlan, streamQuery string) (StorePlanBinding, matchCandidate, error) {
+	var bindings []StorePlanBinding
+	if err := app.db.Preload("Store").Preload("Plan").Preload("Stream").
+		Where("store_id = ? AND plan_id = ? AND enabled = ?", store.ID, plan.ID, true).
+		Order("priority desc, updated_at desc, id asc").
+		Find(&bindings).Error; err != nil {
+		return StorePlanBinding{}, matchCandidate{}, err
+	}
+	if len(bindings) == 0 {
+		return StorePlanBinding{}, matchCandidate{}, errors.New("门店未绑定对应巡检计划")
+	}
+	if strings.TrimSpace(streamQuery) == "" {
+		return bindings[0], matchCandidate{
+			Mode:        "binding_priority",
+			Score:       1000 + bindings[0].Priority,
+			Candidate:   bindings[0].Stream.Name,
+			Explanation: fmt.Sprintf("按绑定优先级选择监控模块「%s」", bindings[0].Stream.Name),
+		}, nil
+	}
+	bestScore := 0
+	var best StorePlanBinding
+	bestValue := ""
+	for _, binding := range bindings {
+		for _, candidate := range streamLookupCandidates(binding.Stream) {
+			score := scoreLookupCandidate(streamQuery, candidate)
+			if score > bestScore {
+				bestScore = score
+				best = binding
+				bestValue = candidate
+			}
+		}
+	}
+	if best.ID > 0 && bestScore >= 500 {
+		return best, matchCandidate{
+			Mode:        "binding_stream_match",
+			Score:       bestScore,
+			Candidate:   bestValue,
+			Explanation: fmt.Sprintf("按监控模块命中绑定「%s」", best.Stream.Name),
+		}, nil
+	}
+	return StorePlanBinding{}, matchCandidate{}, fmt.Errorf("门店「%s」计划「%s」下未命中监控模块「%s」", store.Name, plan.Name, strings.TrimSpace(streamQuery))
+}
+
+func (app *App) findPlanForStore(store Store, requestedPlanName string, requestedStoreName string) (InspectionPlan, matchCandidate, error) {
+	query := strings.TrimSpace(requestedPlanName)
+	if query == "" {
+		return InspectionPlan{}, matchCandidate{}, errors.New("巡检计划名称不能为空")
+	}
+
+	if exactPlan, trace, err := app.findPlanByNameExact(query); err == nil {
+		if _, bindingErr := app.findBindingByStoreAndPlan(store.ID, exactPlan.ID); bindingErr == nil {
+			return exactPlan, trace, nil
+		}
+		return InspectionPlan{}, matchCandidate{}, fmt.Errorf("门店「%s」未绑定巡检计划「%s」，请先在后台绑定后再执行", store.Name, exactPlan.Name)
 	}
 
 	return app.findBoundPlanByNameLike(store, query, requestedStoreName)
 }
 
-func (app *App) findBoundPlanByNameLike(store Store, requestedPlanName string, requestedStoreName string) (InspectionPlan, error) {
+func (app *App) findBoundPlanByNameLike(store Store, requestedPlanName string, requestedStoreName string) (InspectionPlan, matchCandidate, error) {
 	query := strings.TrimSpace(requestedPlanName)
 	if query == "" {
-		return InspectionPlan{}, errors.New("巡检计划名称不能为空")
+		return InspectionPlan{}, matchCandidate{}, errors.New("巡检计划名称不能为空")
 	}
 	plans, err := app.listBoundPlans(store.ID)
 	if err != nil {
-		return InspectionPlan{}, err
+		return InspectionPlan{}, matchCandidate{}, err
 	}
 	if len(plans) == 0 {
-		return InspectionPlan{}, fmt.Errorf("门店「%s」暂无已绑定的巡检计划", store.Name)
+		return InspectionPlan{}, matchCandidate{}, fmt.Errorf("门店「%s」暂无已绑定的巡检计划", store.Name)
 	}
 	planTypeHint := inferPlanTypeHint(query, requestedStoreName)
 	queryCandidates := dedupeLookupValues([]string{query})
 	bestScore := 0
 	var best InspectionPlan
+	bestValue := ""
 	for _, plan := range plans {
 		score := 0
+		candidateValue := ""
 		for _, queryCandidate := range queryCandidates {
 			for _, candidate := range planLookupCandidates(plan) {
 				candidateScore := scoreLookupCandidate(queryCandidate, candidate)
 				if candidateScore > score {
 					score = candidateScore
+					candidateValue = candidate
 				}
 			}
 		}
-		if planTypeHint != "" && strings.TrimSpace(plan.PlanType) == planTypeHint {
+		if score > 0 && planTypeHint != "" && strings.TrimSpace(plan.PlanType) == planTypeHint {
 			score += 120
 		}
-		if normalizeLookupToken(query) == normalizeLookupToken(requestedStoreName) && strings.TrimSpace(plan.PlanType) == "description_inspection" {
+		if score > 0 && normalizeLookupToken(query) == normalizeLookupToken(requestedStoreName) && strings.TrimSpace(plan.PlanType) == "description_inspection" {
 			score += 160
 		}
-		if strings.TrimSpace(plan.PlanType) == "description_inspection" && containsInspectionKeywords(plan.Name) {
+		if score > 0 && strings.TrimSpace(plan.PlanType) == "description_inspection" && containsInspectionKeywords(plan.Name) {
 			score += 40
 		}
 		if score > bestScore {
 			bestScore = score
 			best = plan
+			bestValue = candidateValue
 		}
 	}
-	if best.ID > 0 && bestScore >= 260 {
-		return best, nil
+	if best.ID > 0 && bestScore >= 500 {
+		mode := "plan_bound_fuzzy"
+		if normalizeLookupToken(bestValue) == normalizeLookupToken(best.Name) {
+			mode = "plan_bound_name_match"
+		}
+		for _, alias := range splitLookupValues(best.AliasList) {
+			if normalizeLookupToken(alias) == normalizeLookupToken(bestValue) {
+				mode = "plan_bound_alias_match"
+				break
+			}
+		}
+		for _, keyword := range splitLookupValues(best.TriggerKeywords) {
+			if normalizeLookupToken(keyword) == normalizeLookupToken(bestValue) {
+				mode = "plan_bound_keyword_match"
+				break
+			}
+		}
+		return best, matchCandidate{
+			Mode:        mode,
+			Score:       bestScore,
+			Candidate:   bestValue,
+			Explanation: fmt.Sprintf("门店「%s」下通过「%s」命中计划「%s」", store.Name, bestValue, best.Name),
+		}, nil
 	}
 	planNames := make([]string, 0, len(plans))
 	for _, plan := range plans {
 		planNames = append(planNames, plan.Name)
 	}
-	return InspectionPlan{}, fmt.Errorf("门店「%s」未命中巡检计划「%s」，当前可用计划: %s", store.Name, query, formatNameList(planNames))
+	return InspectionPlan{}, matchCandidate{}, fmt.Errorf("门店「%s」未命中巡检计划「%s」，当前可用计划: %s", store.Name, query, formatNameList(planNames))
+}
+
+func (app *App) currentConfigVersion() string {
+	latest := time.Time{}
+	models := []interface{}{
+		&Store{},
+		&StoreStream{},
+		&InspectionPlan{},
+		&StorePlanBinding{},
+	}
+	for _, model := range models {
+		var item struct {
+			UpdatedAt time.Time
+		}
+		if err := app.db.Model(model).Select("updated_at").Order("updated_at desc").Limit(1).Scan(&item).Error; err != nil {
+			continue
+		}
+		if item.UpdatedAt.After(latest) {
+			latest = item.UpdatedAt
+		}
+	}
+	if latest.IsZero() {
+		return "bootstrap"
+	}
+	return latest.UTC().Format(time.RFC3339)
+}
+
+func (app *App) writeMatchLog(req executeContextRequest, trace resolveTrace, store *Store, plan *InspectionPlan, stream *StoreStream, binding *StorePlanBinding, jobID *uint) {
+	logItem := InspectionMatchLog{
+		QueryText:          strings.TrimSpace(trace.QueryText),
+		NormalizedQuery:    normalizeLookupToken(trace.QueryText),
+		RequestedStoreName: strings.TrimSpace(req.StoreName),
+		RequestedPlanName:  strings.TrimSpace(req.PlanName),
+		RequestedStreamName: strings.TrimSpace(req.StreamName),
+		RequestedSource:    strings.TrimSpace(req.Source),
+		StoreMatchMode:     trace.StoreMatch.Mode,
+		PlanMatchMode:      trace.PlanMatch.Mode,
+		StreamMatchMode:    trace.StreamMatch.Mode,
+		BindingMatchMode:   trace.BindingMatch.Mode,
+		ConfidenceScore:    bestConfidence(trace.StoreMatch.Score, trace.PlanMatch.Score, trace.StreamMatch.Score, trace.BindingMatch.Score),
+		ConfigVersion:      strings.TrimSpace(trace.ConfigVersion),
+		DecisionSummary:    strings.TrimSpace(trace.DecisionSummary),
+		ErrorMessage:       strings.TrimSpace(trace.ErrorMessage),
+	}
+	if jobID != nil && *jobID > 0 {
+		logItem.JobID = jobID
+	}
+	if store != nil {
+		logItem.MatchedStoreID = store.ID
+		logItem.MatchedStoreName = store.Name
+	}
+	if plan != nil {
+		logItem.MatchedPlanID = plan.ID
+		logItem.MatchedPlanName = plan.Name
+	}
+	if stream != nil {
+		logItem.MatchedStreamID = stream.ID
+		logItem.MatchedStreamName = stream.Name
+	}
+	if binding != nil {
+		logItem.MatchedBindingID = binding.ID
+	}
+	_ = app.db.Create(&logItem).Error
 }
 
 func statusFromVerdict(verdict string) string {

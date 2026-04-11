@@ -36,6 +36,7 @@
                     <div>
                       <div class="binding-plan">{{ getPlanDisplayName(binding.plan) }}</div>
                       <div class="table-helper">
+                        优先级：{{ binding.priority || 0 }} ·
                         阈值：匹配 {{ binding.customMatchThresholdPercent || binding.plan?.matchThresholdPercent || 0 }}%
                         <template v-if="binding.customDifferenceThresholdPercent || binding.plan?.differenceThresholdPercent">
                           / 差异 {{ binding.customDifferenceThresholdPercent || binding.plan?.differenceThresholdPercent || 0 }}%
@@ -83,6 +84,7 @@
         <el-table-column label="计划类型" width="150">
           <template #default="{ row }">{{ formatPlanType(row.plan?.planType || "") }}</template>
         </el-table-column>
+        <el-table-column prop="priority" label="优先级" width="90" />
         <el-table-column prop="customMatchThresholdPercent" label="匹配阈值" width="110" />
         <el-table-column prop="customDifferenceThresholdPercent" label="差异阈值" width="110" />
         <el-table-column label="状态" width="100">
@@ -116,6 +118,10 @@
               :value="stream.id"
             />
           </el-select>
+        </el-form-item>
+        <el-form-item label="绑定优先级">
+          <el-input-number v-model="form.priority" :min="0" :max="999" />
+          <div class="table-helper">同一门店同一计划绑定多个监控模块时，优先级越高越先被命中。</div>
         </el-form-item>
         <el-form-item label="匹配阈值">
           <el-input-number v-model="form.customMatchThresholdPercent" :min="0" :max="100" />
@@ -158,10 +164,11 @@ const filteredStreams = computed(() =>
   streams.value.filter((stream) => !form.storeId || stream.storeId === form.storeId),
 );
 
-const emptyForm = () => ({
+  const emptyForm = () => ({
   storeId: undefined as number | undefined,
   planId: undefined as number | undefined,
   streamId: undefined as number | undefined,
+  priority: 100,
   customMatchThresholdPercent: 70,
   customDifferenceThresholdPercent: 8,
   enabled: true,
@@ -204,6 +211,7 @@ function openEdit(item: BindingItem) {
     storeId: item.storeId,
     planId: item.planId,
     streamId: item.streamId,
+    priority: item.priority ?? 100,
     customMatchThresholdPercent: item.customMatchThresholdPercent,
     customDifferenceThresholdPercent: item.customDifferenceThresholdPercent,
     enabled: item.enabled,
