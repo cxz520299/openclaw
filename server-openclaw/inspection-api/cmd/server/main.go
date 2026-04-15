@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -142,6 +143,7 @@ type InspectionMatchLog struct {
 type InspectionJob struct {
 	ID               uint       `json:"id" gorm:"primaryKey"`
 	JobNo            string     `json:"jobNo"`
+	BatchID          *uint      `json:"batchId"`
 	StoreID          uint       `json:"storeId"`
 	Store            Store      `json:"store"`
 	PlanID           uint       `json:"planId"`
@@ -159,6 +161,39 @@ type InspectionJob struct {
 	CreatedAt        time.Time  `json:"createdAt"`
 	UpdatedAt        time.Time  `json:"updatedAt"`
 	Result           *InspectionResult `json:"result,omitempty" gorm:"foreignKey:JobID"`
+}
+
+type BatchExecutionRun struct {
+	ID                 uint            `json:"id" gorm:"primaryKey"`
+	BatchNo            string          `json:"batchNo"`
+	ScopeType          string          `json:"scopeType"`
+	ScopeValue         string          `json:"scopeValue"`
+	OperatorName       string          `json:"operatorName"`
+	OperatorWecomUserID string         `json:"operatorWecomUserId"`
+	OwnerName          string          `json:"ownerName"`
+	OwnerWecomUserID   string          `json:"ownerWecomUserId"`
+	OwnerSource        string          `json:"ownerSource"`
+	TriggerSource      string          `json:"triggerSource"`
+	PlanID             uint            `json:"planId"`
+	Plan               InspectionPlan  `json:"plan"`
+	PlanName           string          `json:"planName"`
+	ExecutionMode      string          `json:"executionMode"`
+	SampleSize         int             `json:"sampleSize"`
+	SelectedStoreCount int             `json:"selectedStoreCount"`
+	MatchedStoreCount  int             `json:"matchedStoreCount"`
+	TotalJobs          int             `json:"totalJobs"`
+	PendingJobs        int             `json:"pendingJobs"`
+	RunningJobs        int             `json:"runningJobs"`
+	SuccessJobs        int             `json:"successJobs"`
+	AlertedJobs        int             `json:"alertedJobs"`
+	PartialSuccessJobs int             `json:"partialSuccessJobs"`
+	ErrorJobs          int             `json:"errorJobs"`
+	Status             string          `json:"status"`
+	SummaryText        string          `json:"summaryText"`
+	FinishedAt         *time.Time      `json:"finishedAt"`
+	CreatedAt          time.Time       `json:"createdAt"`
+	UpdatedAt          time.Time       `json:"updatedAt"`
+	Jobs               []InspectionJob `json:"jobs,omitempty" gorm:"foreignKey:BatchID"`
 }
 
 type InspectionResult struct {
@@ -253,6 +288,27 @@ type manualExecutionRequest struct {
 	TriggerSource      string `json:"triggerSource"`
 }
 
+type batchExecutionRequest struct {
+	StoreIDs            []uint `json:"storeIds"`
+	Region              string `json:"region"`
+	ManagerName         string `json:"managerName"`
+	ManagerWecomUserID  string `json:"managerWecomUserId"`
+	OwnerName           string `json:"ownerName"`
+	OwnerWecomUserID    string `json:"ownerWecomUserId"`
+	OwnerSource         string `json:"ownerSource"`
+	PlanID              uint   `json:"planId"`
+	PlanName            string `json:"planName"`
+	OperatorName        string `json:"operatorName"`
+	OperatorWecomUserID string `json:"operatorWecomUserId"`
+	TriggerSource       string `json:"triggerSource"`
+	ExecutionMode       string `json:"executionMode"`
+	SampleSize          int    `json:"sampleSize"`
+}
+
+type inspectionJobFailureRequest struct {
+	ErrorMessage string `json:"errorMessage"`
+}
+
 type inspectionResultCreateRequest struct {
 	JobID                      uint    `json:"jobId"`
 	StoreName                  string  `json:"storeName"`
@@ -281,6 +337,11 @@ type matchCandidate struct {
 	Score       int
 	Candidate   string
 	Explanation string
+}
+
+type rankedOption struct {
+	Label string
+	Score int
 }
 
 type resolveTrace struct {
@@ -339,6 +400,11 @@ func main() {
 
 		api.GET("/inspection-jobs", app.listJobs)
 		api.GET("/inspection-jobs/:id", app.getJob)
+		api.POST("/inspection-jobs/:id/start", app.startJob)
+		api.POST("/inspection-jobs/:id/fail", app.failJob)
+		api.GET("/batch-execution-runs", app.listBatchExecutionRuns)
+		api.GET("/batch-execution-runs/:id", app.getBatchExecutionRun)
+		api.POST("/batch-execution-runs/:id/retry-failed", app.retryFailedBatchExecutionRun)
 		api.GET("/inspection-results/:id", app.getResult)
 		api.GET("/inspection-match-logs", app.listMatchLogs)
 
@@ -348,6 +414,8 @@ func main() {
 
 		api.POST("/execute/context", app.executeContext)
 		api.POST("/manual-executions", app.createManualExecution)
+		api.POST("/batch-executions/estimate", app.estimateBatchExecution)
+		api.POST("/batch-executions", app.createBatchExecution)
 		api.POST("/inspection-results", app.createInspectionResult)
 	}
 
@@ -412,6 +480,7 @@ func mustMigrate(db *gorm.DB) {
 		&InspectionTemplateItem{},
 		&StorePlanBinding{},
 		&InspectionJob{},
+		&BatchExecutionRun{},
 		&InspectionResult{},
 		&InspectionResultItem{},
 		&InspectionArtifact{},
@@ -745,6 +814,44 @@ func parseID(ctx *gin.Context, key string) (uint, error) {
 	return uint(id), nil
 }
 
+func parsePagination(ctx *gin.Context, defaultPageSize int, maxPageSize int) (int, int, bool) {
+	page := 1
+	pageSize := defaultPageSize
+	all := strings.EqualFold(strings.TrimSpace(ctx.Query("all")), "true") || strings.TrimSpace(ctx.Query("all")) == "1"
+	if rawPage := strings.TrimSpace(ctx.Query("page")); rawPage != "" {
+		if parsed, err := strconv.Atoi(rawPage); err == nil && parsed > 0 {
+			page = parsed
+		}
+	}
+	if rawPageSize := strings.TrimSpace(ctx.Query("pageSize")); rawPageSize != "" {
+		if parsed, err := strconv.Atoi(rawPageSize); err == nil && parsed > 0 {
+			pageSize = parsed
+		}
+	}
+	if maxPageSize > 0 && pageSize > maxPageSize {
+		pageSize = maxPageSize
+	}
+	if all {
+		page = 1
+	}
+	return page, pageSize, all
+}
+
+func buildPaginatedPayload(items interface{}, total int64, page int, pageSize int) gin.H {
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 1
+	}
+	return gin.H{
+		"items":    items,
+		"total":    total,
+		"page":     page,
+		"pageSize": pageSize,
+	}
+}
+
 func (app *App) getSummary(ctx *gin.Context) {
 	var stores, streams, plans, bindings, jobs, results int64
 	app.db.Model(&Store{}).Count(&stores)
@@ -770,15 +877,31 @@ func (app *App) getConfigVersion(ctx *gin.Context) {
 func (app *App) listStores(ctx *gin.Context) {
 	var items []Store
 	query := strings.TrimSpace(ctx.Query("query"))
-	db := app.db.Order("updated_at desc")
+	page, pageSize, all := parsePagination(ctx, 10, 200)
+	db := app.db.Model(&Store{})
 	if query != "" {
 		db = db.Where("name LIKE ? OR code LIKE ?", "%"+query+"%", "%"+query+"%")
 	}
-	if err := db.Find(&items).Error; err != nil {
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
 		fail(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
-	success(ctx, items)
+	queryDB := db.Order("updated_at desc")
+	if !all {
+		queryDB = queryDB.Offset((page - 1) * pageSize).Limit(pageSize)
+	}
+	if err := queryDB.Find(&items).Error; err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if all {
+		pageSize = len(items)
+		if pageSize == 0 {
+			pageSize = 1
+		}
+	}
+	success(ctx, buildPaginatedPayload(items, total, page, pageSize))
 }
 
 func (app *App) createStore(ctx *gin.Context) {
@@ -829,11 +952,47 @@ func (app *App) updateStore(ctx *gin.Context) {
 
 func (app *App) listStreams(ctx *gin.Context) {
 	var items []StoreStream
-	if err := app.db.Preload("Store").Order("updated_at desc").Find(&items).Error; err != nil {
+	page, pageSize, all := parsePagination(ctx, 10, 200)
+	db := app.db.Model(&StoreStream{})
+	if storeID, err := parseOptionalUint(ctx.Query("storeId")); err != nil {
+		fail(ctx, http.StatusBadRequest, "invalid store id")
+		return
+	} else if storeID > 0 {
+		db = db.Where("store_id = ?", storeID)
+	}
+	query := strings.TrimSpace(ctx.Query("query"))
+	if query != "" {
+		like := "%" + query + "%"
+		db = db.Where("name LIKE ? OR alias_list LIKE ? OR stream_url LIKE ? OR source_alias LIKE ?", like, like, like, like)
+	}
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
 		fail(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
-	success(ctx, items)
+	queryDB := app.db.Preload("Store").Model(&StoreStream{})
+	if storeID, _ := parseOptionalUint(ctx.Query("storeId")); storeID > 0 {
+		queryDB = queryDB.Where("store_id = ?", storeID)
+	}
+	if query != "" {
+		like := "%" + query + "%"
+		queryDB = queryDB.Where("name LIKE ? OR alias_list LIKE ? OR stream_url LIKE ? OR source_alias LIKE ?", like, like, like, like)
+	}
+	queryDB = queryDB.Order("updated_at desc")
+	if !all {
+		queryDB = queryDB.Offset((page - 1) * pageSize).Limit(pageSize)
+	}
+	if err := queryDB.Find(&items).Error; err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if all {
+		pageSize = len(items)
+		if pageSize == 0 {
+			pageSize = 1
+		}
+	}
+	success(ctx, buildPaginatedPayload(items, total, page, pageSize))
 }
 
 func (app *App) createStream(ctx *gin.Context) {
@@ -883,11 +1042,33 @@ func (app *App) updateStream(ctx *gin.Context) {
 
 func (app *App) listPlans(ctx *gin.Context) {
 	var items []InspectionPlan
-	if err := app.db.Order("updated_at desc").Find(&items).Error; err != nil {
+	page, pageSize, all := parsePagination(ctx, 10, 200)
+	db := app.db.Model(&InspectionPlan{})
+	query := strings.TrimSpace(ctx.Query("query"))
+	if query != "" {
+		like := "%" + query + "%"
+		db = db.Where("name LIKE ? OR code LIKE ? OR alias_list LIKE ? OR trigger_keywords LIKE ?", like, like, like, like)
+	}
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
 		fail(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
-	success(ctx, items)
+	queryDB := db.Order("updated_at desc")
+	if !all {
+		queryDB = queryDB.Offset((page - 1) * pageSize).Limit(pageSize)
+	}
+	if err := queryDB.Find(&items).Error; err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if all {
+		pageSize = len(items)
+		if pageSize == 0 {
+			pageSize = 1
+		}
+	}
+	success(ctx, buildPaginatedPayload(items, total, page, pageSize))
 }
 
 func (app *App) createPlan(ctx *gin.Context) {
@@ -944,11 +1125,28 @@ func (app *App) listPlanItems(ctx *gin.Context) {
 		return
 	}
 	var items []InspectionPlanItem
-	if err := app.db.Where("plan_id = ?", planID).Order("sort_order asc, id asc").Find(&items).Error; err != nil {
+	page, pageSize, all := parsePagination(ctx, 10, 200)
+	db := app.db.Model(&InspectionPlanItem{}).Where("plan_id = ?", planID)
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
 		fail(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
-	success(ctx, items)
+	queryDB := db.Order("sort_order asc, id asc")
+	if !all {
+		queryDB = queryDB.Offset((page - 1) * pageSize).Limit(pageSize)
+	}
+	if err := queryDB.Find(&items).Error; err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if all {
+		pageSize = len(items)
+		if pageSize == 0 {
+			pageSize = 1
+		}
+	}
+	success(ctx, buildPaginatedPayload(items, total, page, pageSize))
 }
 
 func (app *App) createPlanItem(ctx *gin.Context) {
@@ -998,11 +1196,47 @@ func (app *App) updatePlanItem(ctx *gin.Context) {
 
 func (app *App) listBindings(ctx *gin.Context) {
 	var items []StorePlanBinding
-	if err := app.db.Preload("Store").Preload("Plan").Preload("Stream").Order("priority desc, updated_at desc").Find(&items).Error; err != nil {
+	page, pageSize, all := parsePagination(ctx, 10, 200)
+	db := app.db.Model(&StorePlanBinding{})
+	if storeID, err := parseOptionalUint(ctx.Query("storeId")); err != nil {
+		fail(ctx, http.StatusBadRequest, "invalid store id")
+		return
+	} else if storeID > 0 {
+		db = db.Where("store_id = ?", storeID)
+	}
+	if planID, err := parseOptionalUint(ctx.Query("planId")); err != nil {
+		fail(ctx, http.StatusBadRequest, "invalid plan id")
+		return
+	} else if planID > 0 {
+		db = db.Where("plan_id = ?", planID)
+	}
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
 		fail(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
-	success(ctx, items)
+	queryDB := app.db.Preload("Store").Preload("Plan").Preload("Stream").Model(&StorePlanBinding{})
+	if storeID, _ := parseOptionalUint(ctx.Query("storeId")); storeID > 0 {
+		queryDB = queryDB.Where("store_id = ?", storeID)
+	}
+	if planID, _ := parseOptionalUint(ctx.Query("planId")); planID > 0 {
+		queryDB = queryDB.Where("plan_id = ?", planID)
+	}
+	queryDB = queryDB.Order("priority desc, updated_at desc")
+	if !all {
+		queryDB = queryDB.Offset((page - 1) * pageSize).Limit(pageSize)
+	}
+	if err := queryDB.Find(&items).Error; err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if all {
+		pageSize = len(items)
+		if pageSize == 0 {
+			pageSize = 1
+		}
+	}
+	success(ctx, buildPaginatedPayload(items, total, page, pageSize))
 }
 
 func (app *App) createBinding(ctx *gin.Context) {
@@ -1052,12 +1286,58 @@ func (app *App) updateBinding(ctx *gin.Context) {
 }
 
 func (app *App) listJobs(ctx *gin.Context) {
+	page, pageSize, all := parsePagination(ctx, 10, 500)
+	if rawLimit := strings.TrimSpace(ctx.Query("limit")); rawLimit != "" {
+		if parsed, err := strconv.Atoi(rawLimit); err == nil && parsed > 0 && parsed <= 500 {
+			pageSize = parsed
+			page = 1
+		}
+	}
 	var items []InspectionJob
-	if err := app.db.Preload("Store").Preload("Plan").Preload("Binding").Preload("Binding.Stream").Preload("Result").Order("created_at desc").Limit(200).Find(&items).Error; err != nil {
+	db := app.db.Model(&InspectionJob{})
+	if status := strings.TrimSpace(ctx.Query("status")); status != "" {
+		db = db.Where("status = ?", status)
+	}
+	if triggerSource := strings.TrimSpace(ctx.Query("triggerSource")); triggerSource != "" {
+		db = db.Where("trigger_source = ?", triggerSource)
+	}
+	if batchIDText := strings.TrimSpace(ctx.Query("batchId")); batchIDText != "" {
+		if batchID, err := strconv.ParseUint(batchIDText, 10, 64); err == nil && batchID > 0 {
+			db = db.Where("batch_id = ?", batchID)
+		}
+	}
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
 		fail(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
-	success(ctx, items)
+	queryDB := app.db.Preload("Store").Preload("Plan").Preload("Binding").Preload("Binding.Stream").Preload("Result").Model(&InspectionJob{})
+	if status := strings.TrimSpace(ctx.Query("status")); status != "" {
+		queryDB = queryDB.Where("status = ?", status)
+	}
+	if triggerSource := strings.TrimSpace(ctx.Query("triggerSource")); triggerSource != "" {
+		queryDB = queryDB.Where("trigger_source = ?", triggerSource)
+	}
+	if batchIDText := strings.TrimSpace(ctx.Query("batchId")); batchIDText != "" {
+		if batchID, err := strconv.ParseUint(batchIDText, 10, 64); err == nil && batchID > 0 {
+			queryDB = queryDB.Where("batch_id = ?", batchID)
+		}
+	}
+	queryDB = queryDB.Order("created_at desc")
+	if !all {
+		queryDB = queryDB.Offset((page - 1) * pageSize).Limit(pageSize)
+	}
+	if err := queryDB.Find(&items).Error; err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if all {
+		pageSize = len(items)
+		if pageSize == 0 {
+			pageSize = 1
+		}
+	}
+	success(ctx, buildPaginatedPayload(items, total, page, pageSize))
 }
 
 func (app *App) getJob(ctx *gin.Context) {
@@ -1072,6 +1352,224 @@ func (app *App) getJob(ctx *gin.Context) {
 		return
 	}
 	success(ctx, item)
+}
+
+func (app *App) startJob(ctx *gin.Context) {
+	id, err := parseID(ctx, "id")
+	if err != nil {
+		fail(ctx, http.StatusBadRequest, "invalid id")
+		return
+	}
+	now := time.Now()
+	result := app.db.Model(&InspectionJob{}).
+		Where("id = ? AND status = ?", id, "pending").
+		Updates(map[string]interface{}{
+			"status":        "running",
+			"started_at":    now,
+			"finished_at":   nil,
+			"error_message": "",
+		})
+	if result.Error != nil {
+		fail(ctx, http.StatusInternalServerError, result.Error.Error())
+		return
+	}
+	if result.RowsAffected == 0 {
+		var existing InspectionJob
+		if err := app.db.Preload("Store").Preload("Plan").Preload("Binding").Preload("Binding.Stream").Preload("Result").First(&existing, id).Error; err != nil {
+			fail(ctx, http.StatusNotFound, "job not found")
+			return
+		}
+		fail(ctx, http.StatusConflict, fmt.Sprintf("任务当前状态为 %s，无法重复启动", existing.Status))
+		return
+	}
+	var item InspectionJob
+	if err := app.db.Preload("Store").Preload("Plan").Preload("Binding").Preload("Binding.Stream").Preload("Result").First(&item, id).Error; err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+	app.refreshBatchForJob(item)
+	success(ctx, item)
+}
+
+func (app *App) failJob(ctx *gin.Context) {
+	id, err := parseID(ctx, "id")
+	if err != nil {
+		fail(ctx, http.StatusBadRequest, "invalid id")
+		return
+	}
+	var payload inspectionJobFailureRequest
+	if err := ctx.ShouldBindJSON(&payload); err != nil {
+		fail(ctx, http.StatusBadRequest, err.Error())
+		return
+	}
+	now := time.Now()
+	result := app.db.Model(&InspectionJob{}).
+		Where("id = ? AND status IN ?", id, []string{"pending", "running"}).
+		Updates(map[string]interface{}{
+			"status":        "error",
+			"finished_at":   now,
+			"error_message": strings.TrimSpace(payload.ErrorMessage),
+		})
+	if result.Error != nil {
+		fail(ctx, http.StatusInternalServerError, result.Error.Error())
+		return
+	}
+	if result.RowsAffected == 0 {
+		var existing InspectionJob
+		if err := app.db.First(&existing, id).Error; err != nil {
+			fail(ctx, http.StatusNotFound, "job not found")
+			return
+		}
+		fail(ctx, http.StatusConflict, fmt.Sprintf("任务当前状态为 %s，无法写入失败结果", existing.Status))
+		return
+	}
+	var item InspectionJob
+	if err := app.db.Preload("Store").Preload("Plan").Preload("Binding").Preload("Binding.Stream").Preload("Result").First(&item, id).Error; err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+	app.refreshBatchForJob(item)
+	success(ctx, item)
+}
+
+func (app *App) listBatchExecutionRuns(ctx *gin.Context) {
+	page, pageSize, all := parsePagination(ctx, 10, 200)
+	if rawLimit := strings.TrimSpace(ctx.Query("limit")); rawLimit != "" {
+		if parsed, err := strconv.Atoi(rawLimit); err == nil && parsed > 0 && parsed <= 200 {
+			pageSize = parsed
+			page = 1
+		}
+	}
+	var items []BatchExecutionRun
+	db := app.db.Model(&BatchExecutionRun{})
+	if status := strings.TrimSpace(ctx.Query("status")); status != "" {
+		db = db.Where("status = ?", status)
+	}
+	if managerWecomUserID := strings.TrimSpace(ctx.Query("managerWecomUserId")); managerWecomUserID != "" {
+		db = db.Where("(owner_wecom_user_id = ?) OR (scope_type = ? AND scope_value LIKE ?)", managerWecomUserID, "manager", "%"+managerWecomUserID+"%")
+	}
+	if ownerWecomUserID := strings.TrimSpace(ctx.Query("ownerWecomUserId")); ownerWecomUserID != "" {
+		db = db.Where("(owner_wecom_user_id = ?) OR (scope_type = ? AND scope_value LIKE ?)", ownerWecomUserID, "manager", "%"+ownerWecomUserID+"%")
+	}
+	if ownerName := strings.TrimSpace(ctx.Query("ownerName")); ownerName != "" {
+		db = db.Where("(owner_name = ?) OR (scope_type = ? AND scope_value LIKE ?)", ownerName, "manager", "%"+ownerName+"%")
+	}
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+	queryDB := app.db.Preload("Plan").Model(&BatchExecutionRun{})
+	if status := strings.TrimSpace(ctx.Query("status")); status != "" {
+		queryDB = queryDB.Where("status = ?", status)
+	}
+	if managerWecomUserID := strings.TrimSpace(ctx.Query("managerWecomUserId")); managerWecomUserID != "" {
+		queryDB = queryDB.Where("(owner_wecom_user_id = ?) OR (scope_type = ? AND scope_value LIKE ?)", managerWecomUserID, "manager", "%"+managerWecomUserID+"%")
+	}
+	if ownerWecomUserID := strings.TrimSpace(ctx.Query("ownerWecomUserId")); ownerWecomUserID != "" {
+		queryDB = queryDB.Where("(owner_wecom_user_id = ?) OR (scope_type = ? AND scope_value LIKE ?)", ownerWecomUserID, "manager", "%"+ownerWecomUserID+"%")
+	}
+	if ownerName := strings.TrimSpace(ctx.Query("ownerName")); ownerName != "" {
+		queryDB = queryDB.Where("(owner_name = ?) OR (scope_type = ? AND scope_value LIKE ?)", ownerName, "manager", "%"+ownerName+"%")
+	}
+	queryDB = queryDB.Order("created_at desc")
+	if !all {
+		queryDB = queryDB.Offset((page - 1) * pageSize).Limit(pageSize)
+	}
+	if err := queryDB.Find(&items).Error; err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if all {
+		pageSize = len(items)
+		if pageSize == 0 {
+			pageSize = 1
+		}
+	}
+	success(ctx, buildPaginatedPayload(items, total, page, pageSize))
+}
+
+func (app *App) getBatchExecutionRun(ctx *gin.Context) {
+	id, err := parseID(ctx, "id")
+	if err != nil {
+		fail(ctx, http.StatusBadRequest, "invalid id")
+		return
+	}
+	var item BatchExecutionRun
+	if err := app.db.Preload("Plan").First(&item, id).Error; err != nil {
+		fail(ctx, http.StatusNotFound, "batch execution run not found")
+		return
+	}
+	var jobs []InspectionJob
+	if err := app.db.
+		Preload("Store").
+		Preload("Plan").
+		Preload("Binding").
+		Preload("Binding.Stream").
+		Preload("Result").
+		Where("batch_id = ?", item.ID).
+		Order("id asc").
+		Find(&jobs).Error; err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+	item.Jobs = jobs
+	success(ctx, item)
+}
+
+func (app *App) retryFailedBatchExecutionRun(ctx *gin.Context) {
+	id, err := parseID(ctx, "id")
+	if err != nil {
+		fail(ctx, http.StatusBadRequest, "invalid id")
+		return
+	}
+	retryCount := int64(0)
+	err = app.db.Transaction(func(tx *gorm.DB) error {
+		var item BatchExecutionRun
+		if err := tx.First(&item, id).Error; err != nil {
+			return err
+		}
+		result := tx.Model(&InspectionJob{}).
+			Where("batch_id = ? AND status = ?", id, "error").
+			Updates(map[string]interface{}{
+				"status":        "pending",
+				"started_at":    nil,
+				"finished_at":   nil,
+				"error_message": "",
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		retryCount = result.RowsAffected
+		if retryCount == 0 {
+			return errors.New("当前批次没有可重试的失败任务")
+		}
+		return tx.Model(&BatchExecutionRun{ID: id}).Updates(map[string]interface{}{
+			"status":      "running",
+			"finished_at": nil,
+		}).Error
+	})
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			fail(ctx, http.StatusNotFound, "batch execution run not found")
+			return
+		}
+		fail(ctx, http.StatusBadRequest, err.Error())
+		return
+	}
+	if refreshErr := app.refreshBatchExecutionRun(id); refreshErr != nil {
+		fail(ctx, http.StatusInternalServerError, refreshErr.Error())
+		return
+	}
+	var item BatchExecutionRun
+	if err := app.db.Preload("Plan").First(&item, id).Error; err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+	success(ctx, gin.H{
+		"retryCount": retryCount,
+		"batch":      item,
+	})
 }
 
 func (app *App) getResult(ctx *gin.Context) {
@@ -1089,14 +1587,15 @@ func (app *App) getResult(ctx *gin.Context) {
 }
 
 func (app *App) listMatchLogs(ctx *gin.Context) {
-	limit := 100
+	page, pageSize, all := parsePagination(ctx, 10, 500)
 	if rawLimit := strings.TrimSpace(ctx.Query("limit")); rawLimit != "" {
 		if parsed, err := strconv.Atoi(rawLimit); err == nil && parsed > 0 && parsed <= 500 {
-			limit = parsed
+			pageSize = parsed
+			page = 1
 		}
 	}
 	var items []InspectionMatchLog
-	db := app.db.Order("created_at desc").Limit(limit)
+	db := app.db.Model(&InspectionMatchLog{})
 	if jobIDText := strings.TrimSpace(ctx.Query("jobId")); jobIDText != "" {
 		if jobID, err := strconv.ParseUint(jobIDText, 10, 64); err == nil && jobID > 0 {
 			db = db.Where("job_id = ?", jobID)
@@ -1116,20 +1615,52 @@ func (app *App) listMatchLogs(ctx *gin.Context) {
 			pattern,
 		)
 	}
-	if err := db.Find(&items).Error; err != nil {
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
 		fail(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
-	success(ctx, items)
+	queryDB := db.Order("created_at desc")
+	if !all {
+		queryDB = queryDB.Offset((page - 1) * pageSize).Limit(pageSize)
+	}
+	if err := queryDB.Find(&items).Error; err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if all {
+		pageSize = len(items)
+		if pageSize == 0 {
+			pageSize = 1
+		}
+	}
+	success(ctx, buildPaginatedPayload(items, total, page, pageSize))
 }
 
 func (app *App) listSchedules(ctx *gin.Context) {
 	var items []Schedule
-	if err := app.db.Order("updated_at desc").Find(&items).Error; err != nil {
+	page, pageSize, all := parsePagination(ctx, 10, 200)
+	db := app.db.Model(&Schedule{})
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
 		fail(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
-	success(ctx, items)
+	queryDB := db.Order("updated_at desc")
+	if !all {
+		queryDB = queryDB.Offset((page - 1) * pageSize).Limit(pageSize)
+	}
+	if err := queryDB.Find(&items).Error; err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if all {
+		pageSize = len(items)
+		if pageSize == 0 {
+			pageSize = 1
+		}
+	}
+	success(ctx, buildPaginatedPayload(items, total, page, pageSize))
 }
 
 func (app *App) createSchedule(ctx *gin.Context) {
@@ -1170,6 +1701,139 @@ func (app *App) updateSchedule(ctx *gin.Context) {
 	var item Schedule
 	app.db.First(&item, id)
 	success(ctx, item)
+}
+
+func (app *App) estimateBatchExecution(ctx *gin.Context) {
+	var req batchExecutionRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		fail(ctx, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, stores, targets, err := app.buildBatchExecutionTargets(req)
+	if err != nil {
+		fail(ctx, http.StatusBadRequest, err.Error())
+		return
+	}
+	success(ctx, app.buildBatchEstimatePayload(req, plan, stores, targets))
+}
+
+func (app *App) createBatchExecution(ctx *gin.Context) {
+	var req batchExecutionRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		fail(ctx, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan, stores, targets, err := app.buildBatchExecutionTargets(req)
+	if err != nil {
+		fail(ctx, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(targets) == 0 {
+		fail(ctx, http.StatusBadRequest, "当前条件下没有可执行的批量巡检任务")
+		return
+	}
+
+	now := time.Now()
+	ownerName, ownerWecomUserID, ownerSource := resolveBatchOwner(req)
+	triggerSource := normalizeBatchTriggerSource(req)
+	batchRun := BatchExecutionRun{
+		BatchNo:             fmt.Sprintf("BATCHRUN-%s", now.Format("20060102150405")),
+		ScopeType:           detectBatchScopeType(req),
+		ScopeValue:          detectBatchScopeValue(req),
+		OperatorName:        valueOr(req.OperatorName, "批量巡检"),
+		OperatorWecomUserID: valueOr(req.OperatorWecomUserID, "inspection-admin"),
+		OwnerName:           ownerName,
+		OwnerWecomUserID:    ownerWecomUserID,
+		OwnerSource:         ownerSource,
+		TriggerSource:       triggerSource,
+		PlanID:              plan.ID,
+		PlanName:            plan.Name,
+		ExecutionMode:       normalizeExecutionMode(req.ExecutionMode),
+		SampleSize:          normalizedSampleSize(req.SampleSize),
+		SelectedStoreCount:  len(stores),
+		MatchedStoreCount:   countUniqueTargetStores(targets),
+		TotalJobs:           len(targets),
+		PendingJobs:         len(targets),
+		Status:              "pending",
+		SummaryText:         buildBatchSummaryText(plan.Name, len(stores), countUniqueTargetStores(targets), len(targets), 0, 0, 0),
+	}
+	createdJobs := make([]InspectionJob, 0, len(targets))
+	err = app.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&batchRun).Error; err != nil {
+			return err
+		}
+		for index, target := range targets {
+			job := InspectionJob{
+				JobNo:               fmt.Sprintf("BATCH-%s-%03d", now.Format("20060102150405"), index+1),
+				BatchID:             &batchRun.ID,
+				StoreID:             target.Store.ID,
+				PlanID:              target.Plan.ID,
+				BindingID:           target.Binding.ID,
+				TriggerType:         "manual",
+				TriggerSource:       triggerSource,
+				OperatorName:        valueOr(req.OperatorName, "批量巡检"),
+				OperatorWecomUserID: valueOr(req.OperatorWecomUserID, "inspection-admin"),
+				Status:              "pending",
+			}
+			if err := tx.Create(&job).Error; err != nil {
+				return err
+			}
+			createdJobs = append(createdJobs, job)
+			trace := resolveTrace{
+				QueryText:       fmt.Sprintf("%s | %s", target.Store.Name, target.Plan.Name),
+				ConfigVersion:   app.currentConfigVersion(),
+				StoreMatch:      matchCandidate{Mode: "store_id", Score: 1300, Candidate: strconv.FormatUint(uint64(target.Store.ID), 10), Explanation: fmt.Sprintf("批量任务选中门店「%s」", target.Store.Name)},
+				PlanMatch:       matchCandidate{Mode: "plan_id", Score: 1300, Candidate: strconv.FormatUint(uint64(target.Plan.ID), 10), Explanation: fmt.Sprintf("批量任务选中计划「%s」", target.Plan.Name)},
+				StreamMatch:     matchCandidate{Mode: "binding_stream", Score: 1000, Candidate: target.Binding.Stream.Name, Explanation: fmt.Sprintf("批量任务使用监控模块「%s」", target.Binding.Stream.Name)},
+				BindingMatch:    matchCandidate{Mode: "binding_priority", Score: 1000, Candidate: target.Binding.Stream.Name, Explanation: fmt.Sprintf("按绑定优先级选择监控模块「%s」", target.Binding.Stream.Name)},
+				DecisionSummary: fmt.Sprintf("批量巡检已创建：%s / %s / %s", target.Store.Name, target.Plan.Name, target.Binding.Stream.Name),
+			}
+			contextReq := executeContextRequest{
+				StoreID: target.Store.ID,
+				PlanID:  target.Plan.ID,
+			}
+			app.writeMatchLog(contextReq, trace, &target.Store, &target.Plan, &target.Binding.Stream, &target.Binding, &job.ID)
+		}
+		return nil
+	})
+	if err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := app.refreshBatchExecutionRun(batchRun.ID); err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := app.db.Preload("Plan").First(&batchRun, batchRun.ID).Error; err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if len(createdJobs) > 0 {
+		jobIDs := make([]uint, 0, len(createdJobs))
+		for _, item := range createdJobs {
+			jobIDs = append(jobIDs, item.ID)
+		}
+		var loadedJobs []InspectionJob
+		if err := app.db.
+			Preload("Store").
+			Preload("Plan").
+			Preload("Binding").
+			Preload("Binding.Store").
+			Preload("Binding.Plan").
+			Preload("Binding.Stream").
+			Where("id IN ?", jobIDs).
+			Order("id asc").
+			Find(&loadedJobs).Error; err == nil {
+			createdJobs = loadedJobs
+		}
+	}
+
+	success(ctx, gin.H{
+		"batch":   batchRun,
+		"summary": app.buildBatchEstimatePayload(req, plan, stores, targets),
+		"jobs":    createdJobs,
+	})
 }
 
 func (app *App) executeContext(ctx *gin.Context) {
@@ -1218,6 +1882,12 @@ func (app *App) createManualExecution(ctx *gin.Context) {
 		return
 	}
 	now := time.Now()
+	initialStatus := "pending"
+	var startedAt *time.Time
+	if strings.TrimSpace(req.TriggerSource) == "stream_frame_watch_analyze" {
+		initialStatus = "running"
+		startedAt = &now
+	}
 	job := InspectionJob{
 		JobNo:              fmt.Sprintf("JOB-%s-%04d", now.Format("20060102150405"), time.Now().Nanosecond()%10000),
 		StoreID:            store.ID,
@@ -1227,7 +1897,8 @@ func (app *App) createManualExecution(ctx *gin.Context) {
 		TriggerSource:      req.TriggerSource,
 		OperatorName:       req.OperatorName,
 		OperatorWecomUserID: req.OperatorWecomUserID,
-		Status:             "pending",
+		Status:             initialStatus,
+		StartedAt:          startedAt,
 	}
 	if err := app.db.Create(&job).Error; err != nil {
 		fail(ctx, http.StatusInternalServerError, err.Error())
@@ -1314,10 +1985,146 @@ func (app *App) createInspectionResult(ctx *gin.Context) {
 	}
 
 	app.db.Preload("Items").Preload("Artifacts").First(&result, result.ID)
+	app.refreshBatchForJob(job)
 	success(ctx, result)
 }
 
+type batchExecutionTarget struct {
+	Store   Store
+	Plan    InspectionPlan
+	Binding StorePlanBinding
+	Items   []InspectionPlanItem
+}
+
+func (app *App) buildBatchExecutionTargets(req batchExecutionRequest) (InspectionPlan, []Store, []batchExecutionTarget, error) {
+	var plan InspectionPlan
+	var planMatch matchCandidate
+	var err error
+	switch {
+	case req.PlanID > 0:
+		if err = app.db.First(&plan, req.PlanID).Error; err != nil {
+			return InspectionPlan{}, nil, nil, errors.New("批量巡检计划不存在")
+		}
+	case strings.TrimSpace(req.PlanName) != "":
+		plan, planMatch, err = app.findPlanByNameLike(strings.TrimSpace(req.PlanName))
+		_ = planMatch
+		if err != nil {
+			return InspectionPlan{}, nil, nil, err
+		}
+	default:
+		return InspectionPlan{}, nil, nil, errors.New("请先选择巡检计划")
+	}
+
+	stores, err := app.listBatchStores(req)
+	if err != nil {
+		return InspectionPlan{}, nil, nil, err
+	}
+	if len(stores) == 0 {
+		return InspectionPlan{}, nil, nil, errors.New("当前条件下没有可巡检门店")
+	}
+
+	var items []InspectionPlanItem
+	if err := app.db.Where("plan_id = ? AND enabled = ?", plan.ID, true).Order("sort_order asc, id asc").Find(&items).Error; err != nil {
+		return InspectionPlan{}, nil, nil, err
+	}
+
+	storeBindings := make(map[uint][]StorePlanBinding, len(stores))
+	eligibleStores := make([]Store, 0, len(stores))
+	for _, store := range stores {
+		bindings, err := app.listBindingsForStorePlan(store.ID, plan.ID)
+		if err != nil {
+			return InspectionPlan{}, nil, nil, err
+		}
+		if len(bindings) == 0 {
+			continue
+		}
+		storeBindings[store.ID] = bindings
+		eligibleStores = append(eligibleStores, store)
+	}
+
+	selectedStores := eligibleStores
+	if normalizeExecutionMode(req.ExecutionMode) == "sample" {
+		selectedStores = sampleStores(eligibleStores, req.SampleSize)
+	}
+
+	targets := make([]batchExecutionTarget, 0, len(selectedStores))
+	for _, store := range selectedStores {
+		for _, binding := range storeBindings[store.ID] {
+			targets = append(targets, batchExecutionTarget{
+				Store:   store,
+				Plan:    plan,
+				Binding: binding,
+				Items:   items,
+			})
+		}
+	}
+
+	return plan, selectedStores, targets, nil
+}
+
+func (app *App) buildBatchEstimatePayload(req batchExecutionRequest, plan InspectionPlan, stores []Store, targets []batchExecutionTarget) gin.H {
+	ownerName, ownerWecomUserID, ownerSource := resolveBatchOwner(req)
+	storeIDs := make(map[uint]struct{}, len(targets))
+	monitorIDs := make(map[uint]struct{}, len(targets))
+	totalItems := 0
+	for _, target := range targets {
+		storeIDs[target.Store.ID] = struct{}{}
+		monitorIDs[target.Binding.StreamID] = struct{}{}
+		totalItems += len(target.Items)
+	}
+	storeCount := len(storeIDs)
+	monitorCount := len(monitorIDs)
+	skippedStores := make([]Store, 0)
+	for _, store := range stores {
+		if _, ok := storeIDs[store.ID]; !ok {
+			skippedStores = append(skippedStores, store)
+		}
+	}
+	skippedStoreCount := len(skippedStores)
+	estimatedSeconds := estimateBatchDurationSeconds(storeCount, len(targets), totalItems)
+	summaryText := fmt.Sprintf(
+		"本次预计巡检 %d 家门店、%d 个监控点、%d 条点检项，预计 %s。",
+		storeCount,
+		monitorCount,
+		totalItems,
+		formatEstimatedDurationLabel(estimatedSeconds),
+	)
+	if skippedStoreCount > 0 {
+		summaryText = fmt.Sprintf(
+			"本次共选择 %d 家门店，实际命中 %d 家门店、%d 个监控点、%d 条点检项，预计 %s；另有 %d 家门店因未绑定该计划被自动跳过。",
+			len(stores),
+			storeCount,
+			monitorCount,
+			totalItems,
+			formatEstimatedDurationLabel(estimatedSeconds),
+			skippedStoreCount,
+		)
+	}
+	return gin.H{
+		"planId":             plan.ID,
+		"planName":           plan.Name,
+		"ownerName":          ownerName,
+		"ownerWecomUserId":   ownerWecomUserID,
+		"ownerSource":        ownerSource,
+		"triggerSource":      normalizeBatchTriggerSource(req),
+		"executionMode":      normalizeExecutionMode(req.ExecutionMode),
+		"sampleSize":         normalizedSampleSize(req.SampleSize),
+		"storeCount":         storeCount,
+		"selectedStoreCount": len(stores),
+		"skippedStoreCount":  skippedStoreCount,
+		"jobCount":           len(targets),
+		"monitorCount":       monitorCount,
+		"planItemCount":      totalItems,
+		"estimatedSeconds":   estimatedSeconds,
+		"estimatedLabel":     formatEstimatedDurationLabel(estimatedSeconds),
+		"summaryText":        summaryText,
+		"stores":             stores,
+		"skippedStores":      skippedStores,
+	}
+}
+
 func (app *App) resolveExecutionContext(req executeContextRequest) (Store, InspectionPlan, StorePlanBinding, StoreStream, []InspectionPlanItem, AlertRule, resolveTrace, error) {
+	req = app.normalizeExecutionRequest(req)
 	var store Store
 	var plan InspectionPlan
 	var stream StoreStream
@@ -1472,11 +2279,103 @@ func (app *App) resolveExecutionContext(req executeContextRequest) (Store, Inspe
 	return binding.Store, plan, binding, binding.Stream, items, alertRule, trace, nil
 }
 
+func (app *App) normalizeExecutionRequest(req executeContextRequest) executeContextRequest {
+	storeName := strings.TrimSpace(req.StoreName)
+	planName := strings.TrimSpace(req.PlanName)
+	rawQuery := strings.TrimSpace(req.RawQuery)
+
+	combined := ""
+	switch {
+	case storeName != "" && planName != "" && normalizeLookupToken(storeName) == normalizeLookupToken(planName):
+		combined = storeName
+	case storeName == "" && planName != "" && strings.Contains(planName, " "):
+		combined = planName
+	case planName == "" && storeName != "" && strings.Contains(storeName, " "):
+		combined = storeName
+	case storeName == "" && planName == "" && strings.Contains(rawQuery, " "):
+		combined = rawQuery
+	}
+
+	combined = strings.TrimSpace(combined)
+	if combined == "" {
+		return req
+	}
+
+	tokens := strings.Fields(combined)
+	if len(tokens) < 2 {
+		return req
+	}
+
+	for i := 1; i < len(tokens); i++ {
+		candidateStore := strings.TrimSpace(strings.Join(tokens[:i], " "))
+		candidatePlan := strings.TrimSpace(strings.Join(tokens[i:], " "))
+		if candidateStore == "" || candidatePlan == "" {
+			continue
+		}
+		store, _, err := app.findStoreByNameLike(candidateStore)
+		if err != nil {
+			continue
+		}
+		if _, _, err := app.findPlanForStore(store, candidatePlan, candidateStore); err != nil {
+			continue
+		}
+		req.StoreName = candidateStore
+		req.PlanName = candidatePlan
+		if rawQuery == "" {
+			req.RawQuery = combined
+		}
+		return req
+	}
+
+	return req
+}
+
 func valueOr(value string, fallback string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallback
 	}
 	return strings.TrimSpace(value)
+}
+
+func resolveBatchOwner(req batchExecutionRequest) (string, string, string) {
+	ownerName := strings.TrimSpace(req.OwnerName)
+	ownerWecomUserID := strings.TrimSpace(req.OwnerWecomUserID)
+	ownerSource := strings.TrimSpace(req.OwnerSource)
+	if ownerName == "" {
+		ownerName = strings.TrimSpace(req.ManagerName)
+	}
+	if ownerWecomUserID == "" {
+		ownerWecomUserID = strings.TrimSpace(req.ManagerWecomUserID)
+	}
+	if ownerSource == "" && (ownerName != "" || ownerWecomUserID != "") {
+		if strings.TrimSpace(req.OwnerName) != "" || strings.TrimSpace(req.OwnerWecomUserID) != "" {
+			ownerSource = "wecom_owner"
+		} else {
+			ownerSource = "manager_scope"
+		}
+	}
+	return ownerName, ownerWecomUserID, ownerSource
+}
+
+func resolveBatchManagerScope(req batchExecutionRequest) (string, string) {
+	managerName := strings.TrimSpace(req.ManagerName)
+	managerWecomUserID := strings.TrimSpace(req.ManagerWecomUserID)
+	if managerName != "" || managerWecomUserID != "" {
+		return managerName, managerWecomUserID
+	}
+	ownerName, ownerWecomUserID, _ := resolveBatchOwner(req)
+	return ownerName, ownerWecomUserID
+}
+
+func normalizeBatchTriggerSource(req batchExecutionRequest) string {
+	if triggerSource := strings.TrimSpace(req.TriggerSource); triggerSource != "" {
+		return triggerSource
+	}
+	ownerName, ownerWecomUserID, ownerSource := resolveBatchOwner(req)
+	if ownerName != "" || ownerWecomUserID != "" || ownerSource != "" {
+		return "wecom_owner_batch"
+	}
+	return "inspection_admin_batch"
 }
 
 func normalizeLookupToken(value string) string {
@@ -1686,6 +2585,57 @@ func formatNameList(values []string) string {
 	return strings.Join(items, "、")
 }
 
+func formatCandidateOptions(values []string) string {
+	items := dedupeLookupValues(values)
+	if len(items) == 0 {
+		return ""
+	}
+	if len(items) > 3 {
+		items = items[:3]
+	}
+	parts := make([]string, 0, len(items))
+	for index, item := range items {
+		parts = append(parts, fmt.Sprintf("%d. %s", index+1, item))
+	}
+	return strings.Join(parts, " ")
+}
+
+func appendRankedOption(options []rankedOption, label string, score int, limit int) []rankedOption {
+	if strings.TrimSpace(label) == "" || score <= 0 {
+		return options
+	}
+	for _, item := range options {
+		if normalizeLookupToken(item.Label) == normalizeLookupToken(label) {
+			return options
+		}
+	}
+	insertAt := len(options)
+	for index, item := range options {
+		if score > item.Score {
+			insertAt = index
+			break
+		}
+	}
+	options = append(options, rankedOption{})
+	copy(options[insertAt+1:], options[insertAt:])
+	options[insertAt] = rankedOption{Label: label, Score: score}
+	if limit > 0 && len(options) > limit {
+		options = options[:limit]
+	}
+	return options
+}
+
+func rankedOptionLabels(options []rankedOption) []string {
+	labels := make([]string, 0, len(options))
+	for _, item := range options {
+		if strings.TrimSpace(item.Label) == "" {
+			continue
+		}
+		labels = append(labels, item.Label)
+	}
+	return dedupeLookupValues(labels)
+}
+
 func bestConfidence(values ...int) int {
 	best := 0
 	for _, value := range values {
@@ -1698,6 +2648,13 @@ func bestConfidence(values ...int) int {
 
 func maxInt(left int, right int) int {
 	if left > right {
+		return left
+	}
+	return right
+}
+
+func minInt(left int, right int) int {
+	if left < right {
 		return left
 	}
 	return right
@@ -1860,18 +2817,26 @@ func (app *App) findStoreByNameLike(name string) (Store, matchCandidate, error) 
 	bestScore := 0
 	var best Store
 	bestValue := ""
+	suggestions := make([]rankedOption, 0, 3)
 	queryCandidates := expandAliasCandidates(query, storeAliasMap)
 	for _, store := range stores {
+		storeBestScore := 0
 		candidates := storeLookupCandidates(store)
 		for _, queryCandidate := range queryCandidates {
 			for _, candidate := range candidates {
 				score := scoreLookupCandidate(queryCandidate, candidate)
+				if score > storeBestScore {
+					storeBestScore = score
+				}
 				if score > bestScore {
 					bestScore = score
 					best = store
 					bestValue = candidate
 				}
 			}
+		}
+		if storeBestScore >= 260 {
+			suggestions = appendRankedOption(suggestions, store.Name, storeBestScore, 3)
 		}
 	}
 	if best.ID > 0 && bestScore >= 500 {
@@ -1896,6 +2861,10 @@ func (app *App) findStoreByNameLike(name string) (Store, matchCandidate, error) 
 	storeNames := make([]string, 0, len(stores))
 	for _, store := range stores {
 		storeNames = append(storeNames, store.Name)
+	}
+	candidateText := formatCandidateOptions(rankedOptionLabels(suggestions))
+	if candidateText != "" {
+		return Store{}, matchCandidate{}, fmt.Errorf("未完全命中门店「%s」。请确认是否想执行：%s", query, candidateText)
 	}
 	return Store{}, matchCandidate{}, fmt.Errorf("未命中门店「%s」，当前可用门店: %s", query, formatNameList(storeNames))
 }
@@ -1959,6 +2928,7 @@ func (app *App) findPlanByNameLike(name string) (InspectionPlan, matchCandidate,
 	bestScore := 0
 	var best InspectionPlan
 	bestValue := ""
+	suggestions := make([]rankedOption, 0, 3)
 	for _, candidate := range plans {
 		score := 0
 		candidateValue := ""
@@ -1973,6 +2943,9 @@ func (app *App) findPlanByNameLike(name string) (InspectionPlan, matchCandidate,
 			bestScore = score
 			best = candidate
 			bestValue = candidateValue
+		}
+		if score >= 260 {
+			suggestions = appendRankedOption(suggestions, candidate.Name, score, 3)
 		}
 	}
 	if best.ID > 0 && bestScore >= 500 {
@@ -2006,6 +2979,10 @@ func (app *App) findPlanByNameLike(name string) (InspectionPlan, matchCandidate,
 	for _, candidate := range plans {
 		planNames = append(planNames, candidate.Name)
 	}
+	candidateText := formatCandidateOptions(rankedOptionLabels(suggestions))
+	if candidateText != "" {
+		return InspectionPlan{}, matchCandidate{}, fmt.Errorf("未完全命中巡检计划「%s」。请确认是否想执行：%s", query, candidateText)
+	}
 	return InspectionPlan{}, matchCandidate{}, fmt.Errorf("未命中巡检计划「%s」，当前可用计划: %s", query, formatNameList(planNames))
 }
 
@@ -2018,6 +2995,232 @@ func (app *App) listBoundPlans(storeID uint) ([]InspectionPlan, error) {
 		Order("inspection_plans.id ASC").
 		Find(&plans).Error
 	return plans, err
+}
+
+func (app *App) listBindingsForStorePlan(storeID uint, planID uint) ([]StorePlanBinding, error) {
+	var bindings []StorePlanBinding
+	err := app.db.Preload("Store").Preload("Plan").Preload("Stream").
+		Where("store_id = ? AND plan_id = ? AND enabled = ?", storeID, planID, true).
+		Order("priority desc, updated_at desc, id asc").
+		Find(&bindings).Error
+	return bindings, err
+}
+
+func (app *App) listBatchStores(req batchExecutionRequest) ([]Store, error) {
+	db := app.db.Model(&Store{}).Where("status = ?", "enabled")
+	if len(req.StoreIDs) > 0 {
+		db = db.Where("id IN ?", req.StoreIDs)
+	}
+	if strings.TrimSpace(req.Region) != "" {
+		db = db.Where("region = ?", strings.TrimSpace(req.Region))
+	}
+	managerName, managerWecomUserID := resolveBatchManagerScope(req)
+	if managerWecomUserID != "" {
+		db = db.Where("manager_wecom_user_id = ?", managerWecomUserID)
+	} else if managerName != "" {
+		db = db.Where("manager_name = ?", managerName)
+	}
+	var stores []Store
+	if err := db.Order("id asc").Find(&stores).Error; err != nil {
+		return nil, err
+	}
+	return stores, nil
+}
+
+func estimateBatchDurationSeconds(storeCount int, jobCount int, planItemCount int) int {
+	baseSeconds := 2
+	perJobSeconds := 4
+	perTenItemsSeconds := 1
+	if jobCount <= 0 {
+		return baseSeconds
+	}
+	parallelism := 3
+	seconds := baseSeconds
+	seconds += int((float64(jobCount*perJobSeconds) / float64(parallelism)) + 0.999)
+	seconds += int((float64(planItemCount*perTenItemsSeconds) / 10.0 / float64(parallelism)) + 0.999)
+	if storeCount >= 10 {
+		seconds += 8
+	} else if storeCount >= 5 {
+		seconds += 4
+	}
+	if seconds < 2 {
+		return 2
+	}
+	return seconds
+}
+
+func formatEstimatedDurationLabel(seconds int) string {
+	switch {
+	case seconds <= 10:
+		return fmt.Sprintf("%d-%d 秒", maxInt(seconds-2, 2), maxInt(seconds, 3))
+	case seconds < 60:
+		return fmt.Sprintf("%d-%d 秒", maxInt(seconds-5, 10), seconds+8)
+	default:
+		minutes := int((float64(seconds) / 60.0) + 0.999)
+		maxMinutes := minutes + 2
+		if maxMinutes < 2 {
+			maxMinutes = 2
+		}
+		return fmt.Sprintf("%d-%d 分钟", maxInt(minutes, 1), maxMinutes)
+	}
+}
+
+func normalizeExecutionMode(mode string) string {
+	switch strings.TrimSpace(mode) {
+	case "sample":
+		return "sample"
+	default:
+		return "full"
+	}
+}
+
+func normalizedSampleSize(size int) int {
+	if size < 0 {
+		return 0
+	}
+	return size
+}
+
+func detectBatchScopeType(req batchExecutionRequest) string {
+	managerName, managerWecomUserID := resolveBatchManagerScope(req)
+	switch {
+	case managerWecomUserID != "" || managerName != "":
+		return "manager"
+	case strings.TrimSpace(req.Region) != "":
+		return "region"
+	case len(req.StoreIDs) > 0:
+		return "store_selection"
+	default:
+		return "all_enabled_stores"
+	}
+}
+
+func detectBatchScopeValue(req batchExecutionRequest) string {
+	switch detectBatchScopeType(req) {
+	case "manager":
+		managerName, managerWecomUserID := resolveBatchManagerScope(req)
+		if managerWecomUserID != "" && managerName != "" {
+			return fmt.Sprintf("%s (%s)", managerName, managerWecomUserID)
+		}
+		return valueOr(managerName, managerWecomUserID)
+	case "region":
+		return strings.TrimSpace(req.Region)
+	case "store_selection":
+		return fmt.Sprintf("%d 家门店", len(req.StoreIDs))
+	default:
+		return "全部启用门店"
+	}
+}
+
+func countUniqueTargetStores(targets []batchExecutionTarget) int {
+	storeIDs := make(map[uint]struct{}, len(targets))
+	for _, target := range targets {
+		storeIDs[target.Store.ID] = struct{}{}
+	}
+	return len(storeIDs)
+}
+
+func sampleStores(stores []Store, sampleSize int) []Store {
+	if len(stores) == 0 {
+		return nil
+	}
+	size := normalizedSampleSize(sampleSize)
+	if size <= 0 {
+		size = minInt(len(stores), 3)
+	}
+	if len(stores) <= size {
+		return append([]Store(nil), stores...)
+	}
+	copied := append([]Store(nil), stores...)
+	randomizer := rand.New(rand.NewSource(time.Now().UnixNano()))
+	randomizer.Shuffle(len(copied), func(i int, j int) {
+		copied[i], copied[j] = copied[j], copied[i]
+	})
+	return copied[:size]
+}
+
+func buildBatchSummaryText(planName string, selectedStores int, matchedStores int, totalJobs int, successJobs int, alertedJobs int, errorJobs int) string {
+	if totalJobs == 0 {
+		return fmt.Sprintf("批次使用计划「%s」，当前还没有可执行任务。", planName)
+	}
+	return fmt.Sprintf("批次使用计划「%s」，覆盖 %d 家已选门店，命中 %d 家门店，共 %d 条任务；当前通过 %d 条、告警 %d 条、失败 %d 条。", planName, selectedStores, matchedStores, totalJobs, successJobs, alertedJobs, errorJobs)
+}
+
+func (app *App) refreshBatchForJob(job InspectionJob) {
+	if job.BatchID == nil || *job.BatchID == 0 {
+		return
+	}
+	_ = app.refreshBatchExecutionRun(*job.BatchID)
+}
+
+func (app *App) refreshBatchExecutionRun(batchID uint) error {
+	var batch BatchExecutionRun
+	if err := app.db.First(&batch, batchID).Error; err != nil {
+		return err
+	}
+	var jobs []InspectionJob
+	if err := app.db.Where("batch_id = ?", batchID).Find(&jobs).Error; err != nil {
+		return err
+	}
+	pendingJobs := 0
+	runningJobs := 0
+	successJobs := 0
+	alertedJobs := 0
+	partialSuccessJobs := 0
+	errorJobs := 0
+	uniqueStores := map[uint]struct{}{}
+	for _, job := range jobs {
+		uniqueStores[job.StoreID] = struct{}{}
+		switch strings.TrimSpace(job.Status) {
+		case "pending":
+			pendingJobs++
+		case "running":
+			runningJobs++
+		case "success":
+			successJobs++
+		case "alerted":
+			alertedJobs++
+		case "partial_success":
+			partialSuccessJobs++
+		case "error":
+			errorJobs++
+		}
+	}
+	status := "pending"
+	finishedAt := (*time.Time)(nil)
+	switch {
+	case len(jobs) == 0:
+		status = "pending"
+	case pendingJobs == len(jobs):
+		status = "pending"
+	case pendingJobs > 0 || runningJobs > 0:
+		status = "running"
+	case errorJobs == len(jobs):
+		status = "error"
+	case errorJobs > 0 || partialSuccessJobs > 0:
+		status = "partial_success"
+	case alertedJobs > 0:
+		status = "alerted"
+	default:
+		status = "success"
+	}
+	if pendingJobs == 0 && runningJobs == 0 {
+		now := time.Now()
+		finishedAt = &now
+	}
+	return app.db.Model(&BatchExecutionRun{ID: batchID}).Updates(map[string]interface{}{
+		"matched_store_count":  len(uniqueStores),
+		"total_jobs":           len(jobs),
+		"pending_jobs":         pendingJobs,
+		"running_jobs":         runningJobs,
+		"success_jobs":         successJobs,
+		"alerted_jobs":         alertedJobs,
+		"partial_success_jobs": partialSuccessJobs,
+		"error_jobs":           errorJobs,
+		"status":               status,
+		"summary_text":         buildBatchSummaryText(batch.PlanName, batch.SelectedStoreCount, len(uniqueStores), len(jobs), successJobs, alertedJobs, errorJobs),
+		"finished_at":          finishedAt,
+	}).Error
 }
 
 func (app *App) findBindingByStoreAndPlan(storeID uint, planID uint) (StorePlanBinding, error) {
@@ -2175,6 +3378,7 @@ func (app *App) findBoundPlanByNameLike(store Store, requestedPlanName string, r
 	bestScore := 0
 	var best InspectionPlan
 	bestValue := ""
+	suggestions := make([]rankedOption, 0, 3)
 	for _, plan := range plans {
 		score := 0
 		candidateValue := ""
@@ -2200,6 +3404,9 @@ func (app *App) findBoundPlanByNameLike(store Store, requestedPlanName string, r
 			bestScore = score
 			best = plan
 			bestValue = candidateValue
+		}
+		if score >= 260 {
+			suggestions = appendRankedOption(suggestions, plan.Name, score, 3)
 		}
 	}
 	if best.ID > 0 && bestScore >= 500 {
@@ -2229,6 +3436,10 @@ func (app *App) findBoundPlanByNameLike(store Store, requestedPlanName string, r
 	planNames := make([]string, 0, len(plans))
 	for _, plan := range plans {
 		planNames = append(planNames, plan.Name)
+	}
+	candidateText := formatCandidateOptions(rankedOptionLabels(suggestions))
+	if candidateText != "" {
+		return InspectionPlan{}, matchCandidate{}, fmt.Errorf("门店「%s」下未完全命中巡检计划「%s」。请确认是否想执行：%s", store.Name, query, candidateText)
 	}
 	return InspectionPlan{}, matchCandidate{}, fmt.Errorf("门店「%s」未命中巡检计划「%s」，当前可用计划: %s", store.Name, query, formatNameList(planNames))
 }
