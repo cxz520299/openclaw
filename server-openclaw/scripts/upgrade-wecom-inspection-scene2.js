@@ -204,6 +204,13 @@ function extractStorePlanShortcut(sourceText) {
     }
     return null;
 }
+function isBatchOwnerInspectionRequest(text) {
+    const sourceText = normalizeStorePlanText(text);
+    if (!/(?:执行|运行|启动)巡检计划/u.test(sourceText)) {
+        return false;
+    }
+    return /我名下门店|我的门店|名下门店|负责门店|负责的门店|批量|抽查|全量|全部门店|所有门店/u.test(sourceText);
+}
 function parseDirectStreamFrameWatchRequest(text, mediaList) {
     const sourceText = String(text || "");
     if (!shouldSuppressInlineMediaForStreamFrameWatch(sourceText)) {
@@ -218,6 +225,10 @@ function parseDirectStreamFrameWatchRequest(text, mediaList) {
     const similarityPercent = similarityMatch ? parsePercentNumber(similarityMatch[1]) : undefined;
     const differencePercent = differenceMatch ? parsePercentNumber(differenceMatch[1]) : undefined;
     const isInspectionPlanShortcut = /^[\\s,，:：;；]*[@＠]?\\S*?[\\s,，:：;；]*(?:执行|运行|启动)巡检计划/iu.test(sourceText);
+    const isBatchOwnerIntent = isBatchOwnerInspectionRequest(sourceText);
+    if (isBatchOwnerIntent) {
+        return null;
+    }
     const shouldUseStorePlanShortcut = isInspectionPlanShortcut;
     const storePlanShortcut = shouldUseStorePlanShortcut ? extractStorePlanShortcut(sourceText) : null;
     const explicitRandomFrame = /随机帧|随机抽帧|随机抽取/u.test(sourceText);
@@ -372,10 +383,131 @@ const runBlock = `async function runDirectStreamFrameWatchCompare(request) {
         result.storeName = resolvedScene.storeName;
     }
     return result;
+}
+function normalizeInspectionApiBaseUrl(rawUrl) {
+    const value = String(rawUrl || process.env.INSPECTION_API_BASE_URL || "http://inspection-api:8080/api").trim().replace(/\/+$/u, "");
+    if (!value) {
+        return "http://inspection-api:8080/api";
+    }
+    return /\/api$/u.test(value) ? value : value + "/api";
+}
+async function postInspectionApiJson(url, payload) {
+    const response = await fetch(url, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload || {}),
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) {
+        const message = String(body?.message || body?.error || "").trim() || \`\${response.status} \${response.statusText}\`.trim();
+        throw new Error(message || "inspection api request failed");
+    }
+    if (body && typeof body === "object" && Number(body.code || 0) !== 0) {
+        throw new Error(String(body.message || "inspection api returned non-zero code").trim());
+    }
+    return body?.data || body || {};
+}
+function buildBatchExecutionApiPayload(messageContext) {
+    const payload = messageContext?.WeComBatchExecutionPayload || null;
+    if (!payload) {
+        return null;
+    }
+    return {
+        planName: String(payload.planNameHint || "").trim(),
+        ownerName: String(payload.ownerName || payload.ownerLookupName || "").trim(),
+        ownerWecomUserId: String(payload.ownerWecomUserId || "").trim(),
+        ownerSource: String(payload.ownerSource || "").trim() || "sender",
+        managerName: String(payload.ownerName || payload.ownerLookupName || "").trim(),
+        managerWecomUserId: String(payload.ownerWecomUserId || "").trim(),
+        operatorName: "企业微信批量巡检",
+        operatorWecomUserId: String(payload.operatorWecomUserId || messageContext?.FromUserId || "").trim(),
+        triggerSource: String(payload.triggerSource || "wecom_batch_owner").trim(),
+        executionMode: String(payload.executionMode || "all").trim() || "all",
+    };
+}
+function formatBatchExecutionModeLabel(mode) {
+    return mode === "sample" ? "抽查" : "全量";
+}
+function formatBatchExecutionSuccessReply(result) {
+    const batch = result?.batch || {};
+    const summary = result?.summary || {};
+    const planName = String(batch.planName || summary.planName || "").trim() || "未命名计划";
+    const ownerName = String(batch.ownerName || summary.ownerName || "").trim();
+    const ownerWecomUserId = String(batch.ownerWecomUserId || summary.ownerWecomUserId || "").trim();
+    const ownerDisplay = ownerName || (ownerWecomUserId ? \`负责人ID:\${ownerWecomUserId}\` : "当前发起人");
+    const selectedStoreCount = Number(summary.selectedStoreCount || batch.selectedStoreCount || 0);
+    const matchedStoreCount = Number(summary.storeCount || batch.matchedStoreCount || 0);
+    const skippedStoreCount = Number(summary.skippedStoreCount || 0);
+    const jobCount = Number(summary.jobCount || batch.totalJobs || 0);
+    const monitorCount = Number(summary.monitorCount || 0);
+    const planItemCount = Number(summary.planItemCount || 0);
+    const estimatedLabel = String(summary.estimatedLabel || "").trim();
+    const batchNo = String(batch.batchNo || "").trim();
+    const modeLabel = formatBatchExecutionModeLabel(String(batch.executionMode || summary.executionMode || "all").trim());
+    return [
+        "批量巡检已创建",
+        \`负责人: \${ownerDisplay}\`,
+        \`巡检计划: \${planName}\`,
+        \`执行方式: \${modeLabel}\`,
+        \`门店范围: 选中 \${selectedStoreCount} 家，命中 \${matchedStoreCount} 家\`,
+        skippedStoreCount > 0 ? \`自动跳过: \${skippedStoreCount} 家（未绑定该计划）\` : "",
+        monitorCount > 0 ? \`监控点位: \${monitorCount} 个\` : "",
+        planItemCount > 0 ? \`点检项总数: \${planItemCount} 项\` : "",
+        jobCount > 0 ? \`待执行任务: \${jobCount} 条\` : "",
+        estimatedLabel ? \`预计耗时: \${estimatedLabel}\` : "",
+        batchNo ? \`批次号: \${batchNo}\` : "",
+        "已进入后台批量任务中心，可继续查看进度和失败重试。",
+    ].filter(Boolean).join("\\n");
+}
+function formatBatchExecutionFailureMessage(error) {
+    const detail = String(error?.message || error || "").trim();
+    if (!detail) {
+        return "批量巡检创建失败，请稍后重试。";
+    }
+    if (/未命中巡检计划|未完全命中巡检计划|当前可用计划/u.test(detail)) {
+        return detail;
+    }
+    if (/当前条件下没有可巡检门店|当前条件下没有可执行的批量巡检任务|没有可巡检门店/u.test(detail)) {
+        return detail;
+    }
+    if (/manager|owner|负责人/u.test(detail)) {
+        return \`负责人匹配失败：\${detail}\`;
+    }
+    return \`批量巡检创建失败：\${detail}\`;
+}
+async function createBatchInspectionFromWeCom(messageContext) {
+    const payload = buildBatchExecutionApiPayload(messageContext);
+    if (!payload?.planName) {
+        throw new Error("没有识别到巡检计划，请使用“执行巡检计划 + 我名下门店 + 巡检计划名”重试。");
+    }
+    if (!payload.ownerWecomUserId && !payload.ownerName && !payload.managerWecomUserId && !payload.managerName) {
+        throw new Error("没有识别到负责人，请重新 @负责人，或使用“我名下门店”发起。");
+    }
+    const apiBaseUrl = normalizeInspectionApiBaseUrl(process.env.INSPECTION_API_BASE_URL);
+    const estimate = await postInspectionApiJson(apiBaseUrl + "/batch-executions/estimate", payload);
+    const created = await postInspectionApiJson(apiBaseUrl + "/batch-executions", payload);
+    return {
+        batch: created?.batch || {},
+        jobs: Array.isArray(created?.jobs) ? created.jobs : [],
+        summary: created?.summary || estimate || {},
+    };
 }`;
 
 const formatBlock = `function formatDirectStreamWatchFailureMessage(request, err) {
     const detail = String(err || "").trim();
+    const normalizedDetail = detail
+        .replace(/^Error:\s*/u, "")
+        .replace(/^direct stream watch failed:\s*/u, "")
+        .replace(/^\[stream-watch\]\s*/u, "")
+        .trim();
+    if (/请确认是否想执行|未完全命中/u.test(normalizedDetail)) {
+        return normalizedDetail;
+    }
+    if (/当前可用计划|当前可用门店|当前可用模块|未绑定巡检计划/u.test(normalizedDetail)) {
+        return normalizedDetail;
+    }
     if (/没有找到可用的流地址或门店映射|scene resolve failed/u.test(detail)) {
         return "没有找到可用的门店映射或流地址，请检查门店别名，或直接附上流地址后重试。";
     }
@@ -565,8 +697,9 @@ function formatDirectStreamFrameWatchReply(result) {
 
 const flowBlock = `    const directStreamWatchCommand = shouldSuppressInlineMediaForStreamFrameWatch(text);
     const directStreamWatchRequest = directStreamWatchCommand ? parseDirectStreamFrameWatchRequest(text, mediaList) : null;
+    const isBatchOwnerIntent = isBatchOwnerInspectionRequest(text);
     const shouldSendThinking = account.sendThinkingMessage ?? true;
-    if (directStreamWatchCommand) {
+    if (directStreamWatchCommand && !isBatchOwnerIntent) {
         await sendWeComReply({
             wsClient,
             frame,
@@ -580,10 +713,20 @@ const flowBlock = `    const directStreamWatchCommand = shouldSuppressInlineMedi
             streamId,
         });
     }
+    else if (isBatchOwnerIntent) {
+        await sendWeComReply({
+            wsClient,
+            frame,
+            text: "已接收，正在按负责人匹配门店并创建批量巡检，通常需要 3-10 秒。",
+            runtime,
+            finish: false,
+            streamId,
+        });
+    }
     else if (shouldSendThinking) {
         await sendThinkingReply({ wsClient, frame, streamId, runtime });
     }
-    if (directStreamWatchCommand && !directStreamWatchRequest) {
+    if (directStreamWatchCommand && !directStreamWatchRequest && !isBatchOwnerIntent) {
         await sendWeComReply({
             wsClient,
             frame,
@@ -592,6 +735,33 @@ const flowBlock = `    const directStreamWatchCommand = shouldSuppressInlineMedi
             finish: true,
             streamId,
         });
+        cleanupState();
+        return;
+    }
+    if (isBatchOwnerIntent) {
+        try {
+            const batchMessageContext = buildMessageContext(frame, account, config, text, mediaList, quoteContent);
+            const batchResult = await withTimeout(createBatchInspectionFromWeCom(batchMessageContext), MESSAGE_PROCESS_TIMEOUT_MS, \`Batch inspection create timed out (msgId=\${messageId})\`);
+            await sendWeComReply({
+                wsClient,
+                frame,
+                text: formatBatchExecutionSuccessReply(batchResult),
+                runtime,
+                finish: true,
+                streamId,
+            });
+        }
+        catch (err) {
+            runtime.error?.(\`[wecom][plugin] Batch inspection create failed: \${String(err)}\`);
+            await sendWeComReply({
+                wsClient,
+                frame,
+                text: formatBatchExecutionFailureMessage(err),
+                runtime,
+                finish: true,
+                streamId,
+            });
+        }
         cleanupState();
         return;
     }
@@ -659,6 +829,18 @@ for (const relativePath of DIST_FILES) {
     : source.includes("function extractDescriptionInspectionText(sourceText) {")
       ? "function extractDescriptionInspectionText(sourceText) {"
       : "function parseDirectStreamFrameWatchRequest(text, mediaList) {";
+
+  const hasUpgradeAnchors =
+    source.includes(parseStartMarker) &&
+    source.includes("async function runDirectStreamFrameWatchCompare(request) {") &&
+    source.includes("function formatDirectStreamFrameWatchReply(result) {") &&
+    source.includes("    const directStreamWatchCommand = shouldSuppressInlineMediaForStreamFrameWatch(text);") &&
+    source.includes("    // Step 7: 构建上下文并路由到核心处理流程（带整体超时保护）");
+
+  if (!hasUpgradeAnchors) {
+    console.warn(`wecom inspection scene2 skipped for ${relativePath}: anchors not matched`);
+    continue;
+  }
 
   source = replaceSection(
     source,

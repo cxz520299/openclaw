@@ -137,9 +137,22 @@ repair_session_files() {
   node "${repair_script}"
 }
 
+start_stream_frame_watch_daemon() {
+  config_path="${STREAM_FRAME_WATCH_CONFIG:-/opt/openclaw/config/stream-frame-watch.json}"
+
+  if [ ! -f "${config_path}" ]; then
+    echo "Stream-frame-watch config not found, skipping daemon startup." >&2
+    return 0
+  fi
+
+  echo "Starting stream-frame-watch daemon with ${config_path}..."
+  node /opt/openclaw/services/stream-frame-watch/index.mjs daemon --config "${config_path}" &
+}
+
 ensure_ffmpeg
 ensure_wecom_plugin_ready
 repair_session_files
+start_stream_frame_watch_daemon
 
 if [ -f /app/dist/index.js ]; then
   exec node /app/dist/index.js gateway --bind lan --port 18789

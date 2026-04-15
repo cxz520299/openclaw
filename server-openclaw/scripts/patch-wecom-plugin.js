@@ -193,6 +193,644 @@ function getWecomDocFastAckText(text) {
     return "已接收，正在整理并写入企业微信文档，通常需要 3-8 秒。";
 }`;
 
+const getWecomDocFastAckSignature = "function getWecomDocFastAckText(text) {";
+
+const getWecomDocFastAckWithBatchBridge = `function getWecomDocFastAckText(text) {
+    const sourceText = String(text || "");
+    if (/智能表|表格/u.test(sourceText)) {
+        return "已接收，正在整理并写入企业微信表格，通常需要 3-8 秒。";
+    }
+    return "已接收，正在整理并写入企业微信文档，通常需要 3-8 秒。";
+}
+function pickWecomString(value) {
+    return typeof value === "string" ? value.trim() : "";
+}
+function pushWecomValue(values, value) {
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            pushWecomValue(values, item);
+        }
+        return;
+    }
+    if (typeof value === "string") {
+        const normalized = value.trim();
+        if (normalized) {
+            values.push(normalized);
+        }
+        return;
+    }
+    if (value && typeof value === "object") {
+        pushWecomValue(values, value.userid);
+        pushWecomValue(values, value.userId);
+        pushWecomValue(values, value.id);
+        pushWecomValue(values, value.value);
+        pushWecomValue(values, value.external_userid);
+        pushWecomValue(values, value.externalUserId);
+    }
+}
+function uniqueWecomStrings(values) {
+    return Array.from(new Set((Array.isArray(values) ? values : []).map((value) => pickWecomString(value)).filter(Boolean)));
+}
+function getWecomRawText(body, text, quoteContent) {
+    const candidates = [
+        text,
+        body?.text?.content,
+        body?.content,
+        body?.msg_content?.text?.content,
+        body?.msgContent?.text?.content,
+        body?.quote?.text?.content,
+        quoteContent,
+    ];
+    for (const candidate of candidates) {
+        const normalized = pickWecomString(candidate);
+        if (normalized) {
+            return normalized;
+        }
+    }
+    return "";
+}
+function collectWecomBotUserIds(frame, account, config) {
+    const body = frame?.body || {};
+    const values = [];
+    pushWecomValue(values, body.robot_userid);
+    pushWecomValue(values, body.robotUserId);
+    pushWecomValue(values, body.bot_userid);
+    pushWecomValue(values, body.botUserId);
+    pushWecomValue(values, body.receiverid);
+    pushWecomValue(values, body.receiverId);
+    pushWecomValue(values, body.touserid);
+    pushWecomValue(values, body.toUserId);
+    pushWecomValue(values, body?.to?.userid);
+    pushWecomValue(values, body?.to?.userId);
+    pushWecomValue(values, account?.botId);
+    pushWecomValue(values, account?.botUserId);
+    pushWecomValue(values, account?.userid);
+    pushWecomValue(values, config?.botId);
+    pushWecomValue(values, config?.botUserId);
+    return uniqueWecomStrings(values);
+}
+function collectWecomMentionedUserIds(frame, text) {
+    const body = frame?.body || {};
+    const values = [];
+    const mentionCandidates = [
+        body.mentioned_user_list,
+        body.mentionedUserList,
+        body.mentionedUsers,
+        body.mentioned_userid_list,
+        body.mentionedUserIds,
+        body.at_users,
+        body.atUsers,
+        body.at_user_list,
+        body.atUserList,
+        body.atuseridlist,
+        body.atUserIds,
+        body?.text?.mentioned_user_list,
+        body?.text?.mentionedUserList,
+        body?.text?.mentionedUsers,
+        body?.text?.at_users,
+        body?.text?.atUsers,
+        body?.msg_content?.text?.mentioned_user_list,
+        body?.msg_content?.text?.mentionedUserList,
+        body?.msgContent?.text?.mentionedUserList,
+    ];
+    for (const candidate of mentionCandidates) {
+        pushWecomValue(values, candidate);
+    }
+    const sourceText = String(text || "");
+    for (const match of sourceText.matchAll(/<@([^>]+)>/gu)) {
+        pushWecomValue(values, match[1]);
+    }
+    return uniqueWecomStrings(values);
+}
+function normalizeBatchIntentText(text) {
+    return String(text || "")
+        .replace(/<@[^>]+>/gu, " ")
+        .replace(/[@＠][^\\s]+/gu, " ")
+        .replace(/[()（）\\[\\]【】]/gu, " ")
+        .replace(/\\s+/gu, " ")
+        .trim();
+}
+function isBatchOwnerInspectionIntent(text) {
+    const sourceText = normalizeBatchIntentText(text);
+    if (!/(?:执行|运行|启动)巡检计划/u.test(sourceText)) {
+        return false;
+    }
+    return /我名下门店|我的门店|名下门店|负责门店|负责的门店|批量|抽查|全量|全部门店|所有门店/u.test(sourceText);
+}
+function extractBatchOwnerName(text) {
+    const sourceText = normalizeBatchIntentText(text);
+    const patterns = [
+        /(?:由|让|给)\\s*([^\\s]{2,24})\\s*(?:负责|执行)/u,
+        /([^\\s]{2,24})\\s*(?:名下门店|负责门店|负责的门店)/u,
+    ];
+    for (const pattern of patterns) {
+        const match = sourceText.match(pattern);
+        if (!match) {
+            continue;
+        }
+        const ownerName = pickWecomString(match[1]);
+        if (!ownerName || /^(?:我|我的|自己|全部|所有|门店|计划|巡检|点检)$/u.test(ownerName)) {
+            continue;
+        }
+        return ownerName;
+    }
+    return "";
+}
+function extractBatchPlanNameHint(text) {
+    const sourceText = normalizeBatchIntentText(text)
+        .replace(/^[\\s,，:：;；-]*(?:执行|运行|启动)巡检计划[\\s,，:：;；-]*/u, " ")
+        .replace(/(?:我名下门店|我的门店|名下门店|负责门店|负责的门店|全部门店|所有门店|批量巡检|批量)/gu, " ")
+        .replace(/(?:抽查|全量)(?:巡检)?/gu, " ")
+        .replace(/\\s+/gu, " ")
+        .trim();
+    const matches = sourceText.match(/[^,，;；\\n]{2,40}(?:巡检|点检|计划)/gu) || [];
+    if (matches.length > 0) {
+        return pickWecomString(matches[matches.length - 1]);
+    }
+    return sourceText;
+}
+function detectBatchExecutionMode(text) {
+    const sourceText = String(text || "");
+    if (/抽查/u.test(sourceText)) {
+        return "sample";
+    }
+    if (/全量|全部/u.test(sourceText)) {
+        return "all";
+    }
+    return "all";
+}
+function detectBatchScopeHint(text) {
+    const sourceText = String(text || "");
+    if (/全部门店|所有门店/u.test(sourceText)) {
+        return "all_stores";
+    }
+    if (/我名下门店|我的门店|名下门店|负责门店|负责的门店/u.test(sourceText)) {
+        return "owner_stores";
+    }
+    return "unknown";
+}
+function buildWecomInspectionMessageContext(frame, text, quoteContent, account, config) {
+    const body = frame?.body || {};
+    const conversationId = pickWecomString(body.chatid) || pickWecomString(body?.from?.userid);
+    const fromUserId = pickWecomString(body?.from?.userid);
+    const rawText = getWecomRawText(body, text, quoteContent);
+    const botUserIds = collectWecomBotUserIds(frame, account, config);
+    const mentionedUserIds = collectWecomMentionedUserIds(frame, rawText).filter((userId) => userId && !botUserIds.includes(userId) && userId !== "all");
+    return {
+        conversationId,
+        fromUserId,
+        mentionedUserIds,
+        rawText,
+        chatType: body.chattype === "group" ? "group" : "single",
+    };
+}
+function resolveBatchOwner(params) {
+    const { frame, text, quoteContent, account, config } = params || {};
+    const messageContext = buildWecomInspectionMessageContext(frame, text, quoteContent, account, config);
+    const ownerNameFromText = extractBatchOwnerName(messageContext.rawText);
+    if (ownerNameFromText) {
+        const ownerWecomUserId = messageContext.mentionedUserIds.length === 1 ? messageContext.mentionedUserIds[0] : "";
+        return {
+            ownerWecomUserId,
+            ownerName: ownerNameFromText,
+            ownerSource: "text",
+            unresolved: !ownerWecomUserId,
+        };
+    }
+    if (messageContext.mentionedUserIds.length > 0) {
+        return {
+            ownerWecomUserId: messageContext.mentionedUserIds[0],
+            ownerName: "",
+            ownerSource: "mention",
+            unresolved: false,
+        };
+    }
+    return {
+        ownerWecomUserId: messageContext.fromUserId,
+        ownerName: "",
+        ownerSource: "sender",
+        unresolved: false,
+    };
+}
+function buildBatchExecutionPayload(params) {
+    const { frame, text, quoteContent, account, config } = params || {};
+    const messageContext = buildWecomInspectionMessageContext(frame, text, quoteContent, account, config);
+    if (!isBatchOwnerInspectionIntent(messageContext.rawText)) {
+        return null;
+    }
+    const owner = resolveBatchOwner({ frame, text, quoteContent, account, config });
+    const planNameHint = extractBatchPlanNameHint(messageContext.rawText);
+    const scopeHint = detectBatchScopeHint(messageContext.rawText);
+    const executionMode = detectBatchExecutionMode(messageContext.rawText);
+    return {
+        triggerSource: "wecom_batch_owner",
+        batchIntentType: "owner_store_execution",
+        conversationId: messageContext.conversationId,
+        chatType: messageContext.chatType,
+        operatorWecomUserId: messageContext.fromUserId,
+        mentionedUserIds: messageContext.mentionedUserIds,
+        ownerWecomUserId: owner.ownerWecomUserId,
+        ownerName: owner.ownerName,
+        ownerLookupName: owner.ownerSource === "text" && !owner.ownerWecomUserId ? owner.ownerName : "",
+        ownerSource: owner.ownerSource,
+        ownerUnresolved: Boolean(owner.unresolved),
+        scopeHint,
+        executionMode,
+        planNameHint,
+        rawText: messageContext.rawText,
+        readyForBatchCreate: Boolean(planNameHint && (owner.ownerWecomUserId || owner.ownerName || messageContext.fromUserId)),
+    };
+}
+function buildBatchExecutionCommandBody(messageBody, inspectionContext, batchExecutionPayload) {
+    if (!batchExecutionPayload) {
+        return messageBody;
+    }
+    const lines = [
+        messageBody,
+        "",
+        "[wecom-batch-owner-context]",
+        "triggerSource=" + batchExecutionPayload.triggerSource,
+        "conversationId=" + inspectionContext.conversationId,
+        "chatType=" + inspectionContext.chatType,
+        "fromUserId=" + inspectionContext.fromUserId,
+        "mentionedUserIds=" + inspectionContext.mentionedUserIds.join(","),
+        "ownerWecomUserId=" + (batchExecutionPayload.ownerWecomUserId || ""),
+        "ownerName=" + (batchExecutionPayload.ownerName || ""),
+        "ownerSource=" + batchExecutionPayload.ownerSource,
+        "ownerLookupName=" + (batchExecutionPayload.ownerLookupName || ""),
+        "scopeHint=" + batchExecutionPayload.scopeHint,
+        "executionMode=" + batchExecutionPayload.executionMode,
+        "planNameHint=" + (batchExecutionPayload.planNameHint || ""),
+        "rawText=" + inspectionContext.rawText,
+    ];
+    return lines.filter(Boolean).join("\\n");
+}`;
+
+const buildMessageContextSignature = "function buildMessageContext(frame, account, config, text, mediaList, quoteContent) {";
+
+const buildMessageContextReplacement = `function pickWecomString(value) {
+    return typeof value === "string" ? value.trim() : "";
+}
+function pushWecomValue(values, value) {
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            pushWecomValue(values, item);
+        }
+        return;
+    }
+    if (typeof value === "string") {
+        const normalized = value.trim();
+        if (normalized) {
+            values.push(normalized);
+        }
+        return;
+    }
+    if (value && typeof value === "object") {
+        pushWecomValue(values, value.userid);
+        pushWecomValue(values, value.userId);
+        pushWecomValue(values, value.id);
+        pushWecomValue(values, value.value);
+        pushWecomValue(values, value.external_userid);
+        pushWecomValue(values, value.externalUserId);
+    }
+}
+function uniqueWecomStrings(values) {
+    return Array.from(new Set((Array.isArray(values) ? values : []).map((value) => pickWecomString(value)).filter(Boolean)));
+}
+function getWecomRawText(body, text, quoteContent) {
+    const candidates = [
+        text,
+        body?.text?.content,
+        body?.content,
+        body?.msg_content?.text?.content,
+        body?.msgContent?.text?.content,
+        body?.quote?.text?.content,
+        quoteContent,
+    ];
+    for (const candidate of candidates) {
+        const normalized = pickWecomString(candidate);
+        if (normalized) {
+            return normalized;
+        }
+    }
+    return "";
+}
+function collectWecomBotUserIds(frame, account, config) {
+    const body = frame?.body || {};
+    const values = [];
+    pushWecomValue(values, body.robot_userid);
+    pushWecomValue(values, body.robotUserId);
+    pushWecomValue(values, body.bot_userid);
+    pushWecomValue(values, body.botUserId);
+    pushWecomValue(values, body.receiverid);
+    pushWecomValue(values, body.receiverId);
+    pushWecomValue(values, body.touserid);
+    pushWecomValue(values, body.toUserId);
+    pushWecomValue(values, body?.to?.userid);
+    pushWecomValue(values, body?.to?.userId);
+    pushWecomValue(values, account?.botId);
+    pushWecomValue(values, account?.botUserId);
+    pushWecomValue(values, account?.userid);
+    pushWecomValue(values, config?.botId);
+    pushWecomValue(values, config?.botUserId);
+    return uniqueWecomStrings(values);
+}
+function collectWecomMentionedUserIds(frame, text) {
+    const body = frame?.body || {};
+    const values = [];
+    const mentionCandidates = [
+        body.mentioned_user_list,
+        body.mentionedUserList,
+        body.mentionedUsers,
+        body.mentioned_userid_list,
+        body.mentionedUserIds,
+        body.at_users,
+        body.atUsers,
+        body.at_user_list,
+        body.atUserList,
+        body.atuseridlist,
+        body.atUserIds,
+        body?.text?.mentioned_user_list,
+        body?.text?.mentionedUserList,
+        body?.text?.mentionedUsers,
+        body?.text?.at_users,
+        body?.text?.atUsers,
+        body?.msg_content?.text?.mentioned_user_list,
+        body?.msg_content?.text?.mentionedUserList,
+        body?.msgContent?.text?.mentionedUserList,
+    ];
+    for (const candidate of mentionCandidates) {
+        pushWecomValue(values, candidate);
+    }
+    const sourceText = String(text || "");
+    for (const match of sourceText.matchAll(/<@([^>]+)>/gu)) {
+        pushWecomValue(values, match[1]);
+    }
+    return uniqueWecomStrings(values);
+}
+function normalizeBatchIntentText(text) {
+    return String(text || "")
+        .replace(/<@[^>]+>/gu, " ")
+        .replace(/[@＠][^\\s]+/gu, " ")
+        .replace(/[()（）\\[\\]【】]/gu, " ")
+        .replace(/\\s+/gu, " ")
+        .trim();
+}
+function isBatchOwnerInspectionIntent(text) {
+    const sourceText = normalizeBatchIntentText(text);
+    if (!/(?:执行|运行|启动)巡检计划/u.test(sourceText)) {
+        return false;
+    }
+    return /我名下门店|我的门店|名下门店|负责门店|负责的门店|批量|抽查|全量|全部门店|所有门店/u.test(sourceText);
+}
+function extractBatchOwnerName(text) {
+    const sourceText = normalizeBatchIntentText(text);
+    const patterns = [
+        /(?:由|让|给)\\s*([^\\s]{2,24})\\s*(?:负责|执行)/u,
+        /([^\\s]{2,24})\\s*(?:名下门店|负责门店|负责的门店)/u,
+    ];
+    for (const pattern of patterns) {
+        const match = sourceText.match(pattern);
+        if (!match) {
+            continue;
+        }
+        const ownerName = pickWecomString(match[1]);
+        if (!ownerName || /^(?:我|我的|自己|全部|所有|门店|计划|巡检|点检)$/u.test(ownerName)) {
+            continue;
+        }
+        return ownerName;
+    }
+    return "";
+}
+function extractBatchPlanNameHint(text) {
+    const sourceText = normalizeBatchIntentText(text)
+        .replace(/^[\\s,，:：;；-]*(?:执行|运行|启动)巡检计划[\\s,，:：;；-]*/u, " ")
+        .replace(/(?:我名下门店|我的门店|名下门店|负责门店|负责的门店|全部门店|所有门店|批量巡检|批量)/gu, " ")
+        .replace(/(?:抽查|全量)(?:巡检)?/gu, " ")
+        .replace(/\\s+/gu, " ")
+        .trim();
+    const matches = sourceText.match(/[^,，;；\\n]{2,40}(?:巡检|点检|计划)/gu) || [];
+    if (matches.length > 0) {
+        return pickWecomString(matches[matches.length - 1]);
+    }
+    return sourceText;
+}
+function detectBatchExecutionMode(text) {
+    const sourceText = String(text || "");
+    if (/抽查/u.test(sourceText)) {
+        return "sample";
+    }
+    if (/全量|全部/u.test(sourceText)) {
+        return "all";
+    }
+    return "all";
+}
+function detectBatchScopeHint(text) {
+    const sourceText = String(text || "");
+    if (/全部门店|所有门店/u.test(sourceText)) {
+        return "all_stores";
+    }
+    if (/我名下门店|我的门店|名下门店|负责门店|负责的门店/u.test(sourceText)) {
+        return "owner_stores";
+    }
+    return "unknown";
+}
+function buildWecomInspectionMessageContext(frame, text, quoteContent, account, config) {
+    const body = frame?.body || {};
+    const conversationId = pickWecomString(body.chatid) || pickWecomString(body?.from?.userid);
+    const fromUserId = pickWecomString(body?.from?.userid);
+    const rawText = getWecomRawText(body, text, quoteContent);
+    const botUserIds = collectWecomBotUserIds(frame, account, config);
+    const mentionedUserIds = collectWecomMentionedUserIds(frame, rawText).filter((userId) => userId && !botUserIds.includes(userId) && userId !== "all");
+    return {
+        conversationId,
+        fromUserId,
+        mentionedUserIds,
+        rawText,
+        chatType: body.chattype === "group" ? "group" : "single",
+    };
+}
+function resolveBatchOwner(params) {
+    const { frame, text, quoteContent, account, config } = params || {};
+    const messageContext = buildWecomInspectionMessageContext(frame, text, quoteContent, account, config);
+    const ownerNameFromText = extractBatchOwnerName(messageContext.rawText);
+    if (ownerNameFromText) {
+        const ownerWecomUserId = messageContext.mentionedUserIds.length === 1 ? messageContext.mentionedUserIds[0] : "";
+        return {
+            ownerWecomUserId,
+            ownerName: ownerNameFromText,
+            ownerSource: "text",
+            unresolved: !ownerWecomUserId,
+        };
+    }
+    if (messageContext.mentionedUserIds.length > 0) {
+        return {
+            ownerWecomUserId: messageContext.mentionedUserIds[0],
+            ownerName: "",
+            ownerSource: "mention",
+            unresolved: false,
+        };
+    }
+    return {
+        ownerWecomUserId: messageContext.fromUserId,
+        ownerName: "",
+        ownerSource: "sender",
+        unresolved: false,
+    };
+}
+function buildBatchExecutionPayload(params) {
+    const { frame, text, quoteContent, account, config } = params || {};
+    const messageContext = buildWecomInspectionMessageContext(frame, text, quoteContent, account, config);
+    if (!isBatchOwnerInspectionIntent(messageContext.rawText)) {
+        return null;
+    }
+    const owner = resolveBatchOwner({ frame, text, quoteContent, account, config });
+    const planNameHint = extractBatchPlanNameHint(messageContext.rawText);
+    const scopeHint = detectBatchScopeHint(messageContext.rawText);
+    const executionMode = detectBatchExecutionMode(messageContext.rawText);
+    return {
+        triggerSource: "wecom_batch_owner",
+        batchIntentType: "owner_store_execution",
+        conversationId: messageContext.conversationId,
+        chatType: messageContext.chatType,
+        operatorWecomUserId: messageContext.fromUserId,
+        mentionedUserIds: messageContext.mentionedUserIds,
+        ownerWecomUserId: owner.ownerWecomUserId,
+        ownerName: owner.ownerName,
+        ownerLookupName: owner.ownerSource === "text" && !owner.ownerWecomUserId ? owner.ownerName : "",
+        ownerSource: owner.ownerSource,
+        ownerUnresolved: Boolean(owner.unresolved),
+        scopeHint,
+        executionMode,
+        planNameHint,
+        rawText: messageContext.rawText,
+        readyForBatchCreate: Boolean(planNameHint && (owner.ownerWecomUserId || owner.ownerName || messageContext.fromUserId)),
+    };
+}
+function buildBatchExecutionCommandBody(messageBody, inspectionContext, batchExecutionPayload) {
+    if (!batchExecutionPayload) {
+        return messageBody;
+    }
+    const lines = [
+        messageBody,
+        "",
+        "[wecom-batch-owner-context]",
+        "triggerSource=" + batchExecutionPayload.triggerSource,
+        "conversationId=" + inspectionContext.conversationId,
+        "chatType=" + inspectionContext.chatType,
+        "fromUserId=" + inspectionContext.fromUserId,
+        "mentionedUserIds=" + inspectionContext.mentionedUserIds.join(","),
+        "ownerWecomUserId=" + (batchExecutionPayload.ownerWecomUserId || ""),
+        "ownerName=" + (batchExecutionPayload.ownerName || ""),
+        "ownerSource=" + batchExecutionPayload.ownerSource,
+        "ownerLookupName=" + (batchExecutionPayload.ownerLookupName || ""),
+        "scopeHint=" + batchExecutionPayload.scopeHint,
+        "executionMode=" + batchExecutionPayload.executionMode,
+        "planNameHint=" + (batchExecutionPayload.planNameHint || ""),
+        "rawText=" + inspectionContext.rawText,
+    ];
+    return lines.filter(Boolean).join("\\n");
+}
+function buildMessageContext(frame, account, config, text, mediaList, quoteContent) {
+    const core = getWeComRuntime();
+    const body = frame.body;
+    const chatId = body.chatid || body.from.userid;
+    const chatType = body.chattype === "group" ? "group" : "direct";
+    const route = core.channel.routing.resolveAgentRoute({
+        cfg: config,
+        channel: CHANNEL_ID,
+        accountId: account.accountId,
+        peer: {
+            kind: chatType,
+            id: chatId,
+        },
+    });
+    const fromLabel = chatType === "group" ? "group:" + chatId : "user:" + body.from.userid;
+    const hasImages = mediaList.some((m) => m.contentType?.startsWith("image/"));
+    const baseBody = text || (mediaList.length > 0 ? (hasImages ? MEDIA_IMAGE_PLACEHOLDER : MEDIA_DOCUMENT_PLACEHOLDER) : "");
+    const mediaLines = [];
+    if (mediaList.length > 0) {
+        mediaLines.push("Uploaded media saved locally:");
+        let imageIndex = 0;
+        let fileIndex = 0;
+        for (const media of mediaList) {
+            if (!media?.path) {
+                continue;
+            }
+            const contentType = typeof media.contentType === "string" ? media.contentType : "";
+            if (contentType.startsWith("image/")) {
+                imageIndex += 1;
+                mediaLines.push("- image" + imageIndex + ": " + media.path + " (" + (contentType || "application/octet-stream") + ")");
+            } else {
+                fileIndex += 1;
+                mediaLines.push("- file" + fileIndex + ": " + media.path + " (" + (contentType || "application/octet-stream") + ")");
+            }
+        }
+    }
+    const messageBody = [baseBody, mediaLines.length > 1 ? mediaLines.join("\\n") : ""].filter(Boolean).join("\\n\\n");
+    const normalizedMessageBody = String(messageBody || "").replace(/\\s+/g, "");
+    const suppressInlineMedia = normalizedMessageBody.includes("按图片基准检查这个流")
+        || normalizedMessageBody.includes("按照图片基准检查这个流")
+        || normalizedMessageBody.includes("按基准图检查这个流")
+        || normalizedMessageBody.includes("按照基准图检查这个流")
+        || /^[\\s,，:：;；]*[@＠]?\\S*?[\\s,，:：;；]*(?:执行|运行|启动)巡检计划/iu.test(String(messageBody || ""));
+    const mediaPaths = !suppressInlineMedia && mediaList.length > 0 ? mediaList.map((m) => m.path) : undefined;
+    const mediaTypes = !suppressInlineMedia && mediaList.length > 0
+        ? mediaList.map((m) => m.contentType).filter(Boolean)
+        : undefined;
+    const inspectionMessageContext = buildWecomInspectionMessageContext(frame, text, quoteContent, account, config);
+    const batchExecutionPayload = buildBatchExecutionPayload({
+        frame,
+        text,
+        quoteContent,
+        account,
+        config,
+    });
+    const commandBody = buildBatchExecutionCommandBody(messageBody, inspectionMessageContext, batchExecutionPayload);
+    return core.channel.reply.finalizeInboundContext({
+        Body: messageBody,
+        RawBody: inspectionMessageContext.rawText || messageBody,
+        CommandBody: commandBody,
+        MessageSid: body.msgid,
+        From: chatType === "group" ? CHANNEL_ID + ":group:" + chatId : CHANNEL_ID + ":" + body.from.userid,
+        To: CHANNEL_ID + ":" + chatId,
+        SenderId: body.from.userid,
+        SessionKey: route.sessionKey,
+        AccountId: account.accountId,
+        ChatType: chatType,
+        ConversationLabel: fromLabel,
+        Timestamp: Date.now(),
+        Provider: CHANNEL_ID,
+        Surface: CHANNEL_ID,
+        OriginatingChannel: CHANNEL_ID,
+        OriginatingTo: CHANNEL_ID + ":" + chatId,
+        CommandAuthorized: true,
+        ResponseUrl: body.response_url,
+        ReqId: frame.headers.req_id,
+        WeComFrame: frame,
+        ConversationId: inspectionMessageContext.conversationId,
+        FromUserId: inspectionMessageContext.fromUserId,
+        MentionedUserIds: inspectionMessageContext.mentionedUserIds,
+        RawText: inspectionMessageContext.rawText,
+        WeComInspectionMessageContext: inspectionMessageContext,
+        BatchOwnerResolveResult: batchExecutionPayload
+            ? {
+                ownerWecomUserId: batchExecutionPayload.ownerWecomUserId,
+                ownerName: batchExecutionPayload.ownerName,
+                ownerSource: batchExecutionPayload.ownerSource,
+            }
+            : undefined,
+        WeComBatchExecutionPayload: batchExecutionPayload,
+        WeComIsBatchOwnerIntent: Boolean(batchExecutionPayload),
+        MediaPath: suppressInlineMedia ? undefined : mediaList[0]?.path,
+        MediaType: suppressInlineMedia ? undefined : mediaList[0]?.contentType,
+        MediaPaths: mediaPaths,
+        MediaTypes: mediaTypes,
+        MediaUrls: mediaPaths,
+        ReplyToBody: quoteContent,
+    });
+}`;
+
 const bodyNeedle = `    const hasImages = mediaList.some((m) => m.contentType?.startsWith("image/"));
     const messageBody = text || (mediaList.length > 0 ? (hasImages ? MEDIA_IMAGE_PLACEHOLDER : MEDIA_DOCUMENT_PLACEHOLDER) : "");`;
 
@@ -1062,6 +1700,10 @@ async function patchFile(filePath) {
   const hasWecomDocFastAck = source.includes("正在整理并写入企业微信文档，通常需要 3-8 秒。");
   const hasWecomDocQuickReportSkill = source.includes("wecom_doc_quick_report");
   const hasWecomReplyFallback = source.includes("replyStream failed, fallback to proactive send");
+  const hasBatchOwnerBridge =
+    source.includes("function resolveBatchOwner(params) {") &&
+    source.includes("WeComBatchExecutionPayload") &&
+    source.includes("[wecom-batch-owner-context]");
   if (
     source.includes(MARKER) &&
     hasDirectArtifactHelper &&
@@ -1074,6 +1716,7 @@ async function patchFile(filePath) {
     hasWecomDocFastAck &&
     hasWecomDocQuickReportSkill &&
     hasWecomReplyFallback &&
+    hasBatchOwnerBridge &&
     !hadDuplicateDocFastAckHelpers &&
     source.includes("const suppressInlineMedia = shouldSuppressInlineMediaForStreamFrameWatch(messageBody);") &&
     source.includes("const directStreamWatchRequest = directStreamWatchCommand ? parseDirectStreamFrameWatchRequest(text, mediaList) : null;")
@@ -1090,6 +1733,19 @@ async function patchFile(filePath) {
     const replyPatch = replaceNamedFunction(source, sendWeComReplySignature, sendWeComReplyWithFallback);
     if (replyPatch.replaced) {
       source = replyPatch.source;
+      changed = true;
+    }
+  }
+
+  if (!hasBatchOwnerBridge) {
+    const batchBridgePatch = replaceNamedFunction(source, getWecomDocFastAckSignature, getWecomDocFastAckWithBatchBridge);
+    if (batchBridgePatch.replaced) {
+      source = batchBridgePatch.source;
+      changed = true;
+    }
+    const contextPatch = replaceNamedFunction(source, buildMessageContextSignature, buildMessageContextReplacement);
+    if (contextPatch.replaced) {
+      source = contextPatch.source;
       changed = true;
     }
   }
@@ -1131,11 +1787,11 @@ async function patchFile(filePath) {
   if (!source.includes("runDirectStreamFrameWatchCompare")) {
     if (!source.includes(directStreamHelperNeedle) || !source.includes(directStreamFlowNeedle)) {
       console.warn(`wecom plugin patch skipped for ${filePath}: anchors not matched`);
-      return changed;
+    } else {
+      source = source.replace(directStreamHelperNeedle, directStreamHelperInsert);
+      source = source.replace(directStreamFlowNeedle, directStreamFlowInsert);
+      changed = true;
     }
-    source = source.replace(directStreamHelperNeedle, directStreamHelperInsert);
-    source = source.replace(directStreamFlowNeedle, directStreamFlowInsert);
-    changed = true;
   } else if (source.includes(directStreamFlowInsertLegacy) && !hasDirectArtifactFlow) {
     source = source.replace(directStreamFlowInsertLegacy, directStreamFlowInsert);
     changed = true;
@@ -1145,10 +1801,10 @@ async function patchFile(filePath) {
   } else if (!source.includes('text: "已接收，正在抓取流画面并比对，通常需要 2-5 秒。"')) {
     if (!source.includes(directStreamFlowUpgradeNeedle)) {
       console.warn(`wecom plugin patch skipped for ${filePath}: direct stream upgrade anchor not matched`);
-      return changed;
+    } else {
+      source = source.replace(directStreamFlowUpgradeNeedle, directStreamFlowInsert);
+      changed = true;
     }
-    source = source.replace(directStreamFlowUpgradeNeedle, directStreamFlowInsert);
-    changed = true;
   }
 
   if (!hasWecomDocFastAck && source.includes(directStreamFlowInsertLegacy)) {
@@ -1172,6 +1828,22 @@ async function patchFile(filePath) {
     source = source.replace(wecomWatchdogReconnectingNeedle, wecomWatchdogReconnectingInsert);
     source = source.replace(wecomWatchdogMessageNeedle, wecomWatchdogMessageInsert);
     changed = true;
+  }
+
+  if (!source.includes("function resolveBatchOwner(params) {")) {
+    const batchBridgePatch = replaceNamedFunction(source, getWecomDocFastAckSignature, getWecomDocFastAckWithBatchBridge);
+    if (batchBridgePatch.replaced) {
+      source = batchBridgePatch.source;
+      changed = true;
+    }
+  }
+
+  if (!source.includes("WeComBatchExecutionPayload")) {
+    const contextPatch = replaceNamedFunction(source, buildMessageContextSignature, buildMessageContextReplacement);
+    if (contextPatch.replaced) {
+      source = contextPatch.source;
+      changed = true;
+    }
   }
 
   const normalizedSource = dedupeNamedFunction(

@@ -1310,6 +1310,39 @@ async function postJson(url, payload) {
   return body;
 }
 
+async function getJson(url, params = {}) {
+  const endpoint = new URL(url);
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") {
+      return;
+    }
+    endpoint.searchParams.set(key, String(value));
+  });
+  const response = await fetch(endpoint);
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message =
+      String(body?.message || body?.error || "").trim() ||
+      `${response.status} ${response.statusText}`.trim();
+    throw new Error(message);
+  }
+  if (body && typeof body === "object" && Number(body.code || 0) !== 0) {
+    throw new Error(String(body.message || "API returned non-zero code").trim());
+  }
+  return body;
+}
+
+function summarizeErrorMessage(input, maxLength = 240) {
+  const text = String(input || "").trim().replace(/\s+/gu, " ");
+  if (!text) {
+    return "执行失败";
+  }
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
 function formatPlanItemText(item) {
   const itemType = String(item?.itemType || "").trim();
   const content = cleanupClauseText(item?.content || "");
@@ -1497,6 +1530,49 @@ async function writeInspectionApiResult(execution, job, result) {
     docUrl: String(result?.report?.docUrl || "").trim(),
     items: buildInspectionResultItemsPayload(result),
     artifacts: buildInspectionResultArtifactsPayload(job, result),
+  });
+}
+
+async function listPendingInspectionApiJobs(limit = 3) {
+  const apiBaseUrl = normalizeInspectionApiBaseUrl(process.env.INSPECTION_API_BASE_URL);
+  const response = await getJson(`${apiBaseUrl}/inspection-jobs`, {
+    status: "pending",
+    limit,
+  });
+  return Array.isArray(response?.data) ? response.data : [];
+}
+
+async function startInspectionApiJob(jobId) {
+  const apiBaseUrl = normalizeInspectionApiBaseUrl(process.env.INSPECTION_API_BASE_URL);
+  const response = await postJson(`${apiBaseUrl}/inspection-jobs/${jobId}/start`, {});
+  return response?.data || response || {};
+}
+
+async function failInspectionApiJob(jobId, errorMessage) {
+  const apiBaseUrl = normalizeInspectionApiBaseUrl(process.env.INSPECTION_API_BASE_URL);
+  try {
+    await postJson(`${apiBaseUrl}/inspection-jobs/${jobId}/fail`, {
+      errorMessage: summarizeErrorMessage(errorMessage),
+    });
+  } catch (error) {
+    log("", `mark inspection job ${jobId} failed skipped: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function resolveInspectionApiJobExecution(config, apiJob) {
+  const apiBaseUrl = normalizeInspectionApiBaseUrl(process.env.INSPECTION_API_BASE_URL);
+  const contextResponse = await postJson(`${apiBaseUrl}/execute/context`, {
+    storeId: Number(apiJob?.storeId || 0),
+    planId: Number(apiJob?.planId || 0),
+    streamName: String(apiJob?.binding?.stream?.name || "").trim(),
+    source: String(apiJob?.binding?.stream?.streamUrl || "").trim(),
+    rawQuery: [apiJob?.store?.name, apiJob?.plan?.name].filter(Boolean).join(" "),
+  });
+  return buildInspectionApiJob(config, {
+    data: {
+      ...(contextResponse?.data || contextResponse || {}),
+      job: apiJob,
+    },
   });
 }
 
@@ -3330,6 +3406,59 @@ async function executeScheduledJob(job, state) {
   return result;
 }
 
+async function executePendingInspectionApiJob(configPath, config, apiJob) {
+  const execution = await resolveInspectionApiJobExecution(config, apiJob);
+  const result = await analyzeJob(execution.job);
+  try {
+    const state = await loadState(configPath, config.defaults);
+    result.report = await writeInspectionReport(state, execution.job, result);
+    await saveState(state);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log(execution.job.id, `report write skipped: ${message}`);
+    result.reportError = message;
+  }
+  await writeInspectionApiResult(execution, execution.job, result);
+  return result;
+}
+
+async function processPendingInspectionApiJobs(configPath) {
+  const config = await loadConfig(configPath);
+  const pendingJobs = await listPendingInspectionApiJobs(3);
+  if (!pendingJobs.length) {
+    return 0;
+  }
+
+  let processedCount = 0;
+  for (const item of pendingJobs) {
+    let startedJob = null;
+    try {
+      startedJob = await startInspectionApiJob(item.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/无法重复启动/u.test(message) || /409/u.test(message)) {
+        continue;
+      }
+      throw error;
+    }
+
+    try {
+      await executePendingInspectionApiJob(configPath, config, startedJob);
+      processedCount += 1;
+      log(
+        startedJob?.id || "",
+        `inspection api job completed: ${String(startedJob?.store?.name || "").trim()} / ${String(startedJob?.plan?.name || "").trim()}`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await failInspectionApiJob(startedJob?.id || item.id, message);
+      log(startedJob?.id || item.id, `inspection api job failed: ${message}`);
+    }
+  }
+
+  return processedCount;
+}
+
 async function runOnce(configPath) {
   const config = await loadConfig(configPath);
   const state = await loadState(configPath, config.defaults);
@@ -3350,6 +3479,15 @@ async function runOnce(configPath) {
       await saveState(state);
       console.error(`[stream-watch:${job.id}] ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  try {
+    const processedCount = await processPendingInspectionApiJobs(configPath);
+    if (processedCount > 0) {
+      log("", `processed ${processedCount} pending inspection api job(s)`);
+    }
+  } catch (error) {
+    console.error(`[stream-watch] pending inspection job tick failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
