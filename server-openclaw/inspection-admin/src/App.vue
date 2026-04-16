@@ -1,5 +1,7 @@
 <template>
-  <el-container class="app-shell">
+  <router-view v-if="isBlankLayout" />
+
+  <el-container v-else class="app-shell">
     <el-aside width="260px" class="app-aside">
       <div class="brand-card">
         <div class="brand-kicker">OpenClaw Ops</div>
@@ -34,20 +36,30 @@
       <div class="aside-footer">
         <div class="aside-footer-label">当前视图</div>
         <div class="aside-footer-value">{{ appStore.pageTitle }}</div>
+        <div v-if="authStore.session" class="aside-footer-session">
+          <div class="aside-footer-session-label">已连接账号</div>
+          <div>{{ authStore.session.identifier }}</div>
+        </div>
       </div>
     </el-aside>
 
     <el-container>
       <el-main class="app-main">
         <section class="app-header">
-        <div>
-          <div class="header-kicker">巡检运营中心</div>
-          <div class="header-title">{{ appStore.pageTitle }}</div>
-        </div>
-        <div class="header-status">
-          <span class="soft-tag is-primary">企业微信已接入</span>
-          <span class="soft-tag is-success">巡检后台在线</span>
-        </div>
+          <div>
+            <div class="header-kicker">巡检运营中心</div>
+            <div class="header-title">{{ appStore.pageTitle }}</div>
+          </div>
+          <div class="header-status">
+            <span class="soft-tag is-primary">企业微信已接入</span>
+            <span class="soft-tag is-success">巡检后台在线</span>
+            <el-button v-if="!authStore.session" text @click="goLogin">Boss 登录</el-button>
+            <span v-if="authStore.session" class="soft-tag">
+              Token 已获取 · {{ authStore.session.identifierType }}
+            </span>
+            <el-button v-if="authStore.session" text @click="copyToken">复制 Token</el-button>
+            <el-button v-if="authStore.session" text @click="logout">退出登录</el-button>
+          </div>
         </section>
         <router-view v-slot="{ Component }">
           <transition name="fade-slide" mode="out-in" appear>
@@ -61,19 +73,46 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { useRoute } from "vue-router";
+import { ElMessage } from "element-plus";
+import { useRoute, useRouter } from "vue-router";
 import { useAppStore } from "@/stores/app";
+import { useAuthStore } from "@/stores/auth";
 
 const route = useRoute();
+const router = useRouter();
 const appStore = useAppStore();
+const authStore = useAuthStore();
 
 const activeMenu = computed(() => route.path);
+const isBlankLayout = computed(() => route.meta.layout === "blank");
+
+async function copyToken() {
+  if (!authStore.session?.token) {
+    return;
+  }
+
+  await navigator.clipboard.writeText(authStore.session.token);
+  ElMessage.success("Token 已复制");
+}
+
+function logout() {
+  authStore.logout();
+  void router.push("/login");
+}
+
+function goLogin() {
+  void router.push({
+    path: "/login",
+    query: {
+      redirect: route.fullPath,
+    },
+  });
+}
 </script>
 
 <style scoped>
 .app-shell {
   min-height: 100vh;
-  background: transparent;
 }
 
 .app-aside {
@@ -101,14 +140,16 @@ const activeMenu = computed(() => route.path);
 
 .brand-kicker,
 .header-kicker,
-.aside-footer-label {
+.aside-footer-label,
+.aside-footer-session-label {
   font-size: 12px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
 }
 
 .brand-kicker,
-.aside-footer-label {
+.aside-footer-label,
+.aside-footer-session-label {
   color: rgba(255, 255, 255, 0.62);
 }
 
@@ -169,6 +210,14 @@ const activeMenu = computed(() => route.path);
   font-size: 18px;
 }
 
+.aside-footer-session {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.82);
+  word-break: break-all;
+}
+
 .app-header {
   display: flex;
   align-items: flex-start;
@@ -219,19 +268,15 @@ const activeMenu = computed(() => route.path);
   }
 
   .aside-footer {
-    position: static;
-    margin: 18px 8px 6px;
+    position: relative;
+    right: auto;
+    bottom: auto;
+    left: auto;
+    margin: 16px 8px 0;
   }
 
-  .app-header {
-    flex-direction: column;
-    align-items: stretch;
-    min-height: unset;
-    padding: 0;
-  }
-
-  .header-status {
-    justify-content: flex-start;
+  .app-main {
+    padding: 20px 18px 28px;
   }
 }
 </style>

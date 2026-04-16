@@ -11,6 +11,120 @@
         </div>
       </template>
 
+      <div v-if="bossSelection.storeName" class="boss-selection-banner">
+        <span class="soft-tag is-primary">Boss 门店</span>
+        <span class="boss-selection-text">{{ bossSelection.storeName }}</span>
+        <span class="table-helper">shopId: {{ bossSelection.shopId || "-" }} · nodeId: {{ bossSelection.nodeId || "-" }}</span>
+      </div>
+
+      <el-card v-if="bossSelection.storeName" shadow="never" class="boss-device-card">
+        <template #header>
+          <div class="section-heading">
+            <div>
+              <div class="section-title">Boss 监控模块</div>
+              <div class="section-subtitle">通过后端代理调用 `deptDeviceList` 获取当前 Boss 门店下的监控模块。</div>
+            </div>
+            <span class="soft-tag">{{ bossDevices.length }} 条</span>
+          </div>
+        </template>
+
+        <el-table :data="bossDevices" v-loading="bossDevicesLoading" border>
+          <el-table-column label="模块名称" min-width="180">
+            <template #default="{ row }">
+              <button type="button" class="boss-link-button" @click="openBossCamera(row)">
+                {{ row.name }}
+              </button>
+            </template>
+          </el-table-column>
+          <el-table-column prop="deviceId" label="deviceId" width="120" />
+          <el-table-column prop="id" label="节点 ID" width="120" />
+          <el-table-column label="在线状态" width="100">
+            <template #default="{ row }">
+              <span :class="['soft-tag', row.online === 1 ? 'is-success' : 'is-warning']">
+                {{ row.online === 1 ? "在线" : "离线" }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="设备状态" width="100">
+            <template #default="{ row }">
+              <span :class="['soft-tag', row.status === 1 ? 'is-success' : 'is-warning']">
+                {{ row.status === 1 ? "启用" : "异常" }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="缩略图" width="180">
+            <template #default="{ row }">
+              <button v-if="row.thumbUrl" type="button" class="boss-thumb-button" @click="openBossCamera(row)">
+                <div class="boss-thumb-card">
+                  <img :src="row.thumbUrl" :alt="row.name" class="boss-thumb-image" />
+                </div>
+              </button>
+              <span v-else class="table-helper">暂无缩略图</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="120" fixed="right">
+            <template #default="{ row }">
+              <el-button text @click="openBossCamera(row)">打开摄像头</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-card>
+
+      <el-dialog
+        v-model="bossPlayerVisible"
+        class="boss-player-dialog"
+        width="960px"
+        destroy-on-close
+        @closed="handleBossPlayerClosed"
+      >
+        <template #header>
+          <div class="section-heading">
+            <div>
+              <div class="section-title">摄像头预览</div>
+              <div class="section-subtitle">
+                {{ bossPlayerTitle || "准备拉取实时视频流" }}
+              </div>
+            </div>
+            <span v-if="currentBossDevice" class="soft-tag is-primary">
+              deviceId: {{ currentBossDevice.deviceId || currentBossDevice.id }}
+            </span>
+          </div>
+        </template>
+
+        <div class="boss-player-shell">
+          <div v-if="bossPlayerError" class="boss-player-error">
+            <div class="section-title">当前预览打开失败</div>
+            <div class="section-subtitle">{{ bossPlayerError }}</div>
+          </div>
+
+          <div v-else-if="bossPlayerLoading" class="boss-player-loading">
+            <el-skeleton animated :rows="6" />
+          </div>
+
+          <video
+            v-else
+            ref="bossVideoRef"
+            class="boss-video-element"
+            controls
+            autoplay
+            muted
+            playsinline
+          />
+        </div>
+
+        <template #footer>
+          <el-button @click="bossPlayerVisible = false">关闭</el-button>
+          <el-button
+            v-if="currentBossDevice"
+            type="primary"
+            plain
+            @click="openBossCameraInNewWindow(currentBossDevice)"
+          >
+            在 Boss 原页打开
+          </el-button>
+        </template>
+      </el-dialog>
+
       <div v-loading="loading">
         <transition-group v-if="topology.length" name="fade-slide" tag="div" class="stream-store-list">
           <article v-for="store in topology" :key="store.id" class="store-topology-card">
@@ -164,24 +278,75 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
+import { useRoute } from "vue-router";
 import { inspectionApi } from "@/api/inspection";
 import { useAppStore } from "@/stores/app";
-import type { BindingItem, StoreItem, StreamItem } from "@/types/inspection";
+import type { BindingItem, BossDeviceItem, BossVideoSession, StoreItem, StreamItem } from "@/types/inspection";
 import { buildStoreTopology, formatBooleanStatus, formatStoreStatus, getPlanDisplayName } from "@/utils/inspection";
 
+type MpegtsPlayer = {
+  attachMediaElement: (element: HTMLMediaElement) => void;
+  load: () => void;
+  play: () => Promise<void> | void;
+  pause: () => void;
+  unload: () => void;
+  destroy: () => void;
+};
+
+type MpegtsModule = {
+  isSupported: () => boolean;
+  createPlayer: (config: Record<string, unknown>) => MpegtsPlayer;
+};
+
+declare global {
+  interface Window {
+    mpegts?: MpegtsModule;
+    __inspectionMpegtsPromise?: Promise<MpegtsModule>;
+  }
+}
+
+const MPEGTS_CDN_URL = "https://cdn.jsdelivr.net/npm/mpegts.js@1.8.0/dist/mpegts.min.js";
+
 const appStore = useAppStore();
+const route = useRoute();
 const loading = ref(false);
+const bossDevicesLoading = ref(false);
 const submitting = ref(false);
 const dialogVisible = ref(false);
 const editingId = ref<number | null>(null);
 const streams = ref<StreamItem[]>([]);
 const stores = ref<StoreItem[]>([]);
 const bindings = ref<BindingItem[]>([]);
+const bossDevices = ref<BossDeviceItem[]>([]);
+const bossPlayerVisible = ref(false);
+const bossPlayerLoading = ref(false);
+const bossPlayerError = ref("");
+const bossVideoRef = ref<HTMLVideoElement | null>(null);
+const currentBossDevice = ref<BossDeviceItem | null>(null);
+const currentBossSession = ref<BossVideoSession | null>(null);
+let bossPlayerInstance: MpegtsPlayer | null = null;
 
 const topology = computed(() => buildStoreTopology(stores.value, streams.value, bindings.value));
 const streamMap = computed(() => new Map(streams.value.map((item) => [item.id, item])));
+const bossPlayerTitle = computed(() => {
+  if (!currentBossDevice.value) {
+    return "";
+  }
+  return `${currentBossDevice.value.name} · ${bossSelection.value.storeName || "Boss 摄像头"}`;
+});
+const bossSelection = computed(() => ({
+  storeName: typeof route.query.bossStoreName === "string" ? route.query.bossStoreName : "",
+  shopId: typeof route.query.bossShopId === "string" ? route.query.bossShopId : "",
+  nodeId: typeof route.query.bossNodeId === "string" ? route.query.bossNodeId : "",
+  deptId:
+    typeof route.query.bossDeptId === "string"
+      ? route.query.bossDeptId
+      : typeof route.query.bossNodeId === "string"
+        ? route.query.bossNodeId.replace(/^S_/, "")
+        : "",
+}));
 
 const emptyForm = () => ({
   storeId: undefined as number | undefined,
@@ -211,6 +376,144 @@ async function loadData() {
   } finally {
     loading.value = false;
   }
+}
+
+async function loadBossDevices() {
+  if (!bossSelection.value.nodeId && !bossSelection.value.deptId) {
+    bossDevices.value = [];
+    return;
+  }
+
+  bossDevicesLoading.value = true;
+  try {
+    const response = await inspectionApi.getBossDeptDevices({
+      id: bossSelection.value.nodeId,
+      deptId: bossSelection.value.deptId,
+    });
+    bossDevices.value = response.data;
+  } catch (error: any) {
+    bossDevices.value = [];
+    const message = error?.response?.data?.message || error?.message || "获取 Boss 监控模块失败";
+    ElMessage.error(message);
+  } finally {
+    bossDevicesLoading.value = false;
+  }
+}
+
+async function openBossCamera(item: BossDeviceItem) {
+  const cameraId = item.deviceId || item.id;
+  if (!cameraId) {
+    ElMessage.warning("当前设备缺少摄像头 ID，暂时无法打开");
+    return;
+  }
+
+  currentBossDevice.value = item;
+  bossPlayerVisible.value = true;
+  bossPlayerLoading.value = true;
+  bossPlayerError.value = "";
+  currentBossSession.value = null;
+  destroyBossPlayer();
+
+  try {
+    const response = await inspectionApi.startBossVideoPlay({
+      deviceId: cameraId,
+      isSlave: item.slaveFlag || 0,
+      realPlayType: 1,
+      playCloudMediaFlag: 0,
+    });
+    currentBossSession.value = response.data;
+    bossPlayerLoading.value = false;
+    await nextTick();
+    await mountBossPlayer(response.data.streamUrl);
+  } catch (error: any) {
+    bossPlayerError.value = error?.message || "实时视频流拉取失败";
+  } finally {
+    bossPlayerLoading.value = false;
+  }
+}
+
+function openBossCameraInNewWindow(item: BossDeviceItem) {
+  const cameraId = item.deviceId || item.id;
+  if (!cameraId) {
+    ElMessage.warning("当前设备缺少摄像头 ID，暂时无法打开");
+    return;
+  }
+  window.open(`https://www.ovopark.com/video-flv-v3/index.html?id=${cameraId}`, "_blank", "noopener,noreferrer");
+}
+
+async function ensureMpegts(): Promise<MpegtsModule> {
+  if (window.mpegts) {
+    return window.mpegts;
+  }
+  if (window.__inspectionMpegtsPromise) {
+    return window.__inspectionMpegtsPromise;
+  }
+
+  window.__inspectionMpegtsPromise = new Promise<MpegtsModule>((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = MPEGTS_CDN_URL;
+    script.async = true;
+    script.onload = () => {
+      if (window.mpegts) {
+        resolve(window.mpegts);
+        return;
+      }
+      reject(new Error("播放器脚本加载失败"));
+    };
+    script.onerror = () => reject(new Error("播放器脚本加载失败"));
+    document.head.appendChild(script);
+  });
+
+  return window.__inspectionMpegtsPromise;
+}
+
+async function mountBossPlayer(streamUrl: string) {
+  const videoElement = bossVideoRef.value;
+  if (!videoElement) {
+    throw new Error("播放器节点初始化失败");
+  }
+
+  const mpegts = await ensureMpegts();
+  if (!mpegts.isSupported()) {
+    throw new Error("当前浏览器不支持 FLV 实时播放");
+  }
+
+  const player = mpegts.createPlayer({
+    type: "flv",
+    isLive: true,
+    url: streamUrl,
+    hasAudio: true,
+    enableWorker: false,
+    enableStashBuffer: false,
+    stashInitialSize: 128,
+  });
+
+  bossPlayerInstance = player;
+  player.attachMediaElement(videoElement);
+  player.load();
+  await Promise.resolve(player.play());
+}
+
+function destroyBossPlayer() {
+  if (bossPlayerInstance) {
+    bossPlayerInstance.pause();
+    bossPlayerInstance.unload();
+    bossPlayerInstance.destroy();
+    bossPlayerInstance = null;
+  }
+
+  if (bossVideoRef.value) {
+    bossVideoRef.value.removeAttribute("src");
+    bossVideoRef.value.load();
+  }
+}
+
+function handleBossPlayerClosed() {
+  destroyBossPlayer();
+  currentBossDevice.value = null;
+  currentBossSession.value = null;
+  bossPlayerLoading.value = false;
+  bossPlayerError.value = "";
 }
 
 function openCreate() {
@@ -255,10 +558,102 @@ async function submit() {
 onMounted(() => {
   appStore.setPageTitle("监控模块管理");
   void loadData();
+  void loadBossDevices();
+});
+
+onUnmounted(() => {
+  destroyBossPlayer();
 });
 </script>
 
 <style scoped>
+.boss-device-card {
+  margin-bottom: 20px;
+}
+
+.boss-player-shell {
+  min-height: 520px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at top left, rgba(18, 111, 255, 0.12), transparent 28%),
+    linear-gradient(180deg, rgba(8, 15, 28, 0.96), rgba(12, 24, 44, 0.98));
+  overflow: hidden;
+}
+
+.boss-video-element {
+  width: 100%;
+  height: 520px;
+  display: block;
+  background: #000;
+}
+
+.boss-player-loading,
+.boss-player-error {
+  width: min(520px, 100%);
+  padding: 24px;
+}
+
+.boss-player-error {
+  color: #fff;
+}
+
+.boss-thumb-card {
+  width: 140px;
+  height: 84px;
+  overflow: hidden;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.04);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.boss-thumb-button,
+.boss-link-button {
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.boss-thumb-button {
+  display: block;
+}
+
+.boss-link-button {
+  color: #126fff;
+  font: inherit;
+  text-align: left;
+}
+
+.boss-link-button:hover {
+  color: #0b57d0;
+  text-decoration: underline;
+}
+
+.boss-thumb-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.boss-selection-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(18, 111, 255, 0.08);
+}
+
+.boss-selection-text {
+  color: var(--oc-text);
+  font-weight: 700;
+}
+
 .stream-store-list {
   display: grid;
   gap: 18px;

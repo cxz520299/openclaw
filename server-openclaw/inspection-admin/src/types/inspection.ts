@@ -168,3 +168,59 @@ export interface Summary {
   jobs: number;
   results: number;
 }
+
+export interface BossDepartmentItem {
+  id: string;
+  pid: string;
+  text: string;
+  shopId: string;
+  openStatus: number;
+  validateStatus: number;
+  deviceCount: number;
+  departmentType: number | null;
+  isConfig: number;
+  attributes?: {
+    level: number;
+    latitude: number | null;
+    longitude: number | null;
+    timeZone: number;
+  };
+}
+
+export interface BossDeviceItem {
+  groupId: number;
+  deptId: number;
+  deviceId: number;
+  deviceStatusId: number;
+  online: number;
+  thirdPartType: number;
+  slaveFlag: number;
+  deviceName: string;
+  supportMultiPlay: number;
+  canPtzFlag: number;
+  accessType: number;
+  settingEnable: number;
+  devIcon: string;
+  thumbUrl: string;
+  mainIpc: number;
+  yzsDepOutIpcFlag: number;
+  supportVideoPlayback: number;
+  sceneBySnap: number;
+  status: number;
+  ptzEnable: number;
+  id: number;
+  name: string;
+  thirdpartType: number;
+  dtype: number;
+  offlineTimeStamp: number | null;
+}
+
+export interface BossVideoSession {
+  deviceId: number;
+  name: string;
+  streamUrl: string;
+  hlsUrl?: string;
+  sessionId?: string;
+  networkQualityUrl?: string;
+  raw?: Record<string, unknown>;
+}

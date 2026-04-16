@@ -1,6 +1,8 @@
 import http from "./http";
 import type {
   BindingItem,
+  BossDeviceItem,
+  BossVideoSession,
   JobItem,
   Plan,
   PlanItem,
@@ -9,6 +11,7 @@ import type {
   StoreItem,
   StreamItem,
   Summary,
+  BossDepartmentItem,
   TemplateCategory,
   TemplateItem,
 } from "@/types/inspection";
@@ -19,6 +22,12 @@ export const inspectionApi = {
   getStores: () => http.get<never, { code: number; message: string; data: StoreItem[] }>("/stores"),
   createStore: (payload: Partial<StoreItem>) => http.post("/stores", payload),
   updateStore: (id: number, payload: Partial<StoreItem>) => http.put(`/stores/${id}`, payload),
+  getBossDepartmentsTree: () =>
+    http.post<never, { code: number; message: string; data: BossDepartmentItem[] }>("/boss/departments/tree"),
+  getBossDeptDevices: (params: { id?: string; deptId?: string; groupId?: string }) =>
+    http.get<never, { code: number; message: string; data: BossDeviceItem[] }>("/boss/devices/dept", { params }),
+  startBossVideoPlay: (payload: { deviceId: number; isSlave?: number; realPlayType?: number; playCloudMediaFlag?: number }) =>
+    http.post<typeof payload, { code: number; message: string; data: BossVideoSession }>("/boss/video/play", payload),
 
   getStreams: () => http.get<never, { code: number; message: string; data: StreamItem[] }>("/store-streams"),
   createStream: (payload: Partial<StreamItem>) => http.post("/store-streams", payload),

@@ -25,7 +25,10 @@
             <div class="section-title">门店管理</div>
             <div class="section-subtitle">门店是巡检任务的业务主体，后续会继续挂接多个监控模块和不同巡检计划。</div>
           </div>
-          <el-button type="primary" @click="openCreate">新建门店</el-button>
+          <div class="store-actions">
+            <el-button :loading="bossLoading" @click="loadBossStores">获取 Boss 门店</el-button>
+            <el-button type="primary" @click="openCreate">新建门店</el-button>
+          </div>
         </div>
       </template>
 
@@ -51,6 +54,42 @@
         </el-table-column>
       </el-table>
     </el-card>
+
+    <el-card shadow="never" class="panel-card">
+      <template #header>
+        <div class="section-heading">
+          <div>
+            <div class="section-title">Boss 门店列表</div>
+            <div class="section-subtitle">通过后端代理调用 boss 接口 `getSimpleDepartmentsTree` 的结果。</div>
+          </div>
+          <span class="soft-tag">{{ bossStores.length }} 条</span>
+        </div>
+      </template>
+
+        <el-table :data="bossStores" v-loading="bossLoading" border>
+          <el-table-column prop="text" label="门店名称" min-width="240" />
+          <el-table-column prop="shopId" label="shopId" width="140" />
+          <el-table-column prop="id" label="节点 ID" width="140" />
+        <el-table-column label="开店状态" width="120">
+          <template #default="{ row }">
+            <span :class="['soft-tag', row.openStatus === 1 ? 'is-success' : 'is-warning']">
+              {{ row.openStatus === 1 ? "营业中" : "闭店" }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="deviceCount" label="设备数" width="100" />
+          <el-table-column label="经纬度" min-width="220">
+            <template #default="{ row }">
+              {{ row.attributes?.longitude ?? "-" }}, {{ row.attributes?.latitude ?? "-" }}
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="140" fixed="right">
+            <template #default="{ row }">
+              <el-button text type="primary" @click="goToStreams(row)">去监控模块</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-card>
 
     <el-dialog v-model="dialogVisible" :title="editingId ? '编辑门店' : '新建门店'" width="560px">
       <el-form :model="form" label-width="110px">
@@ -88,17 +127,21 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
+import { useRouter } from "vue-router";
 import { inspectionApi } from "@/api/inspection";
 import { useAppStore } from "@/stores/app";
-import type { StoreItem } from "@/types/inspection";
+import type { BossDepartmentItem, StoreItem } from "@/types/inspection";
 import { formatStoreStatus } from "@/utils/inspection";
 
 const appStore = useAppStore();
+const router = useRouter();
 const loading = ref(false);
 const submitting = ref(false);
+const bossLoading = ref(false);
 const dialogVisible = ref(false);
 const editingId = ref<number | null>(null);
 const stores = ref<StoreItem[]>([]);
+const bossStores = ref<BossDepartmentItem[]>([]);
 
 const enabledCount = computed(() => stores.value.filter((item) => item.status === "enabled").length);
 const assignedManagerCount = computed(() => stores.value.filter((item) => item.managerWecomUserId).length);
@@ -124,6 +167,35 @@ async function loadData() {
   } finally {
     loading.value = false;
   }
+}
+
+async function loadBossStores() {
+  bossLoading.value = true;
+  try {
+    const response = await inspectionApi.getBossDepartmentsTree();
+    const filteredStores = response.data.filter((item) => item.text.includes("成都市锦江区")).slice(0, 2);
+    bossStores.value = filteredStores;
+    ElMessage.success(`已筛出 ${filteredStores.length} 条成都市锦江区 Boss 门店`);
+  } catch (error: any) {
+    bossStores.value = [];
+    const message = error?.response?.data?.message || error?.message || "获取 Boss 门店失败";
+    ElMessage.error(message);
+  } finally {
+    bossLoading.value = false;
+  }
+}
+
+function goToStreams(item: BossDepartmentItem) {
+  const deptId = item.id.startsWith("S_") ? item.id.slice(2) : item.id;
+  void router.push({
+    name: "streams",
+    query: {
+      bossStoreName: item.text,
+      bossShopId: item.shopId,
+      bossNodeId: item.id,
+      bossDeptId: deptId,
+    },
+  });
 }
 
 function openCreate() {
@@ -160,3 +232,10 @@ onMounted(() => {
   void loadData();
 });
 </script>
+
+<style scoped>
+.store-actions {
+  display: flex;
+  gap: 12px;
+}
+</style>
