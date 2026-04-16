@@ -71,30 +71,57 @@
         </div>
       </template>
 
-      <el-table :data="bindings" v-loading="loading" border>
-        <el-table-column label="门店" min-width="150">
-          <template #default="{ row }">{{ row.store?.name || "-" }}</template>
-        </el-table-column>
-        <el-table-column label="监控模块" min-width="160">
-          <template #default="{ row }">{{ row.stream?.name || "-" }}</template>
-        </el-table-column>
-        <el-table-column label="巡检计划" min-width="180">
-          <template #default="{ row }">{{ row.plan?.name || "-" }}</template>
-        </el-table-column>
-        <el-table-column label="计划类型" width="150">
-          <template #default="{ row }">{{ formatPlanType(row.plan?.planType || "") }}</template>
-        </el-table-column>
-        <el-table-column prop="priority" label="优先级" width="90" />
-        <el-table-column prop="customMatchThresholdPercent" label="匹配阈值" width="110" />
-        <el-table-column prop="customDifferenceThresholdPercent" label="差异阈值" width="110" />
-        <el-table-column label="状态" width="100">
-          <template #default="{ row }">
-            <span :class="['soft-tag', row.enabled ? 'is-success' : 'is-warning']">
-              {{ formatBooleanStatus(row.enabled) }}
-            </span>
-          </template>
-        </el-table-column>
-      </el-table>
+      <div class="panel-toolbar">
+        <div class="panel-toolbar-main">
+          <div class="panel-toolbar-title">先看绑定规模，再按表格核对组合关系</div>
+          <div class="panel-toolbar-desc">这块更偏运营核对，所以把绑定总量、启用数和关联模块数先做摘要，再看门店、计划和监控模块的具体对应关系。</div>
+          <div class="panel-chip-row">
+            <span class="panel-chip">绑定总数 <strong>{{ pagination.total }}</strong></span>
+            <span class="panel-chip">启用绑定 <strong>{{ enabledBindingCount }}</strong></span>
+            <span class="panel-chip">涉及门店 <strong>{{ storeCards.length }}</strong></span>
+            <span class="panel-chip">涉及模块 <strong>{{ streams.length }}</strong></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-table-area">
+        <el-table :data="tableBindings" v-loading="loading" border>
+          <el-table-column label="门店" min-width="150">
+            <template #default="{ row }">{{ row.store?.name || "-" }}</template>
+          </el-table-column>
+          <el-table-column label="监控模块" min-width="160">
+            <template #default="{ row }">{{ row.stream?.name || "-" }}</template>
+          </el-table-column>
+          <el-table-column label="巡检计划" min-width="180">
+            <template #default="{ row }">{{ row.plan?.name || "-" }}</template>
+          </el-table-column>
+          <el-table-column label="计划类型" width="150">
+            <template #default="{ row }">{{ formatPlanType(row.plan?.planType || "") }}</template>
+          </el-table-column>
+          <el-table-column prop="priority" label="优先级" width="90" />
+          <el-table-column prop="customMatchThresholdPercent" label="匹配阈值" width="110" />
+          <el-table-column prop="customDifferenceThresholdPercent" label="差异阈值" width="110" />
+          <el-table-column label="状态" width="100">
+            <template #default="{ row }">
+              <span :class="['soft-tag', row.enabled ? 'is-success' : 'is-warning']">
+                {{ formatBooleanStatus(row.enabled) }}
+              </span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <div class="table-pagination">
+        <el-pagination
+          v-model:current-page="pagination.page"
+          v-model:page-size="pagination.pageSize"
+          background
+          layout="total, sizes, prev, pager, next, jumper"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="pagination.total"
+          @change="loadData"
+        />
+      </div>
     </el-card>
 
     <el-dialog v-model="dialogVisible" :title="editingId ? '编辑绑定' : '新增绑定'" width="640px">
@@ -155,14 +182,21 @@ const submitting = ref(false);
 const dialogVisible = ref(false);
 const editingId = ref<number | null>(null);
 const bindings = ref<BindingItem[]>([]);
+const tableBindings = ref<BindingItem[]>([]);
 const stores = ref<StoreItem[]>([]);
 const plans = ref<Plan[]>([]);
 const streams = ref<StreamItem[]>([]);
+const pagination = reactive({
+  page: 1,
+  pageSize: 10,
+  total: 0,
+});
 
 const storeCards = computed(() => buildStoreTopology(stores.value, streams.value, bindings.value));
 const filteredStreams = computed(() =>
   streams.value.filter((stream) => !form.storeId || stream.storeId === form.storeId),
 );
+const enabledBindingCount = computed(() => tableBindings.value.filter((item) => item.enabled).length);
 
   const emptyForm = () => ({
   storeId: undefined as number | undefined,
@@ -178,16 +212,22 @@ const form = reactive(emptyForm());
 async function loadData() {
   loading.value = true;
   try {
-    const [bindingResp, storeResp, streamResp, planResp] = await Promise.all([
-      inspectionApi.getBindings(),
-      inspectionApi.getStores(),
-      inspectionApi.getStreams(),
-      inspectionApi.getPlans(),
+    const [bindingResp, storeResp, streamResp, planResp, bindingTableResp] = await Promise.all([
+      inspectionApi.getBindings({ all: true }),
+      inspectionApi.getStores({ all: true }),
+      inspectionApi.getStreams({ all: true }),
+      inspectionApi.getPlans({ all: true }),
+      inspectionApi.getBindings({
+        page: pagination.page,
+        pageSize: pagination.pageSize,
+      }),
     ]);
-    bindings.value = bindingResp.data;
-    stores.value = storeResp.data;
-    streams.value = streamResp.data;
-    plans.value = planResp.data;
+    bindings.value = bindingResp.data.items;
+    tableBindings.value = bindingTableResp.data.items;
+    stores.value = storeResp.data.items;
+    streams.value = streamResp.data.items;
+    plans.value = planResp.data.items;
+    pagination.total = bindingTableResp.data.total;
   } finally {
     loading.value = false;
   }

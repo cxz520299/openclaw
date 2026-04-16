@@ -581,12 +581,22 @@ func splitAndTrim(text string) []string {
 func (app *App) listTemplateCategories(ctx *gin.Context) {
 	var categories []InspectionTemplateCategory
 	query := strings.TrimSpace(ctx.Query("query"))
-	db := app.db.Order("sort_order asc, id asc")
+	page, pageSize, all := parsePagination(ctx, 10, 200)
+	db := app.db.Model(&InspectionTemplateCategory{})
 	if query != "" {
 		like := "%" + query + "%"
 		db = db.Where("name LIKE ? OR code LIKE ?", like, like)
 	}
-	if err := db.Find(&categories).Error; err != nil {
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+	queryDB := db.Order("sort_order asc, id asc")
+	if !all {
+		queryDB = queryDB.Offset((page - 1) * pageSize).Limit(pageSize)
+	}
+	if err := queryDB.Find(&categories).Error; err != nil {
 		fail(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -615,11 +625,18 @@ func (app *App) listTemplateCategories(ctx *gin.Context) {
 			ItemCount:                  countMap[category.ID],
 		})
 	}
-	success(ctx, response)
+	if all {
+		pageSize = len(response)
+		if pageSize == 0 {
+			pageSize = 1
+		}
+	}
+	success(ctx, buildPaginatedPayload(response, total, page, pageSize))
 }
 
 func (app *App) listTemplateItems(ctx *gin.Context) {
-	query := app.db.Preload("Category").Order("sort_order asc, id asc")
+	page, pageSize, all := parsePagination(ctx, 10, 200)
+	query := app.db.Model(&InspectionTemplateItem{})
 
 	if categoryID, err := parseOptionalUint(ctx.Query("categoryId")); err != nil {
 		fail(ctx, http.StatusBadRequest, "invalid category id")
@@ -634,12 +651,36 @@ func (app *App) listTemplateItems(ctx *gin.Context) {
 		query = query.Where("name LIKE ? OR code LIKE ? OR prompt_text LIKE ?", like, like, like)
 	}
 
-	var items []InspectionTemplateItem
-	if err := query.Find(&items).Error; err != nil {
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
 		fail(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
-	success(ctx, items)
+
+	var items []InspectionTemplateItem
+	queryDB := app.db.Preload("Category").Model(&InspectionTemplateItem{})
+	if categoryID, _ := parseOptionalUint(ctx.Query("categoryId")); categoryID > 0 {
+		queryDB = queryDB.Where("category_id = ?", categoryID)
+	}
+	if keyword != "" {
+		like := "%" + keyword + "%"
+		queryDB = queryDB.Where("name LIKE ? OR code LIKE ? OR prompt_text LIKE ?", like, like, like)
+	}
+	queryDB = queryDB.Order("sort_order asc, id asc")
+	if !all {
+		queryDB = queryDB.Offset((page - 1) * pageSize).Limit(pageSize)
+	}
+	if err := queryDB.Find(&items).Error; err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if all {
+		pageSize = len(items)
+		if pageSize == 0 {
+			pageSize = 1
+		}
+	}
+	success(ctx, buildPaginatedPayload(items, total, page, pageSize))
 }
 
 func (app *App) listTemplateItemsByCategory(ctx *gin.Context) {
@@ -648,15 +689,33 @@ func (app *App) listTemplateItemsByCategory(ctx *gin.Context) {
 		fail(ctx, http.StatusBadRequest, "invalid category id")
 		return
 	}
+	page, pageSize, all := parsePagination(ctx, 10, 200)
+	db := app.db.Model(&InspectionTemplateItem{}).Where("category_id = ?", categoryID)
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
 	var items []InspectionTemplateItem
-	if err := app.db.Preload("Category").
+	queryDB := app.db.Preload("Category").
+		Model(&InspectionTemplateItem{}).
 		Where("category_id = ?", categoryID).
-		Order("sort_order asc, id asc").
+		Order("sort_order asc, id asc")
+	if !all {
+		queryDB = queryDB.Offset((page - 1) * pageSize).Limit(pageSize)
+	}
+	if err := queryDB.
 		Find(&items).Error; err != nil {
 		fail(ctx, http.StatusInternalServerError, err.Error())
 		return
 	}
-	success(ctx, items)
+	if all {
+		pageSize = len(items)
+		if pageSize == 0 {
+			pageSize = 1
+		}
+	}
+	success(ctx, buildPaginatedPayload(items, total, page, pageSize))
 }
 
 func parseOptionalUint(raw string) (uint, error) {

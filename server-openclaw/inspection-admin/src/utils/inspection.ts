@@ -1,4 +1,14 @@
-import type { BindingItem, JobItem, Plan, PlanItem, ResultClause, ResultItem, StoreItem, StreamItem } from "@/types/inspection";
+import type {
+  BatchExecutionRun,
+  BindingItem,
+  JobItem,
+  Plan,
+  PlanItem,
+  ResultClause,
+  ResultItem,
+  StoreItem,
+  StreamItem,
+} from "@/types/inspection";
 
 const textMap: Record<string, string> = {
   enabled: "启用",
@@ -10,14 +20,38 @@ const textMap: Record<string, string> = {
   random: "随机帧",
   pending: "待执行",
   running: "执行中",
+  error: "执行失败",
   success: "已通过",
   alerted: "异常告警",
   partial_success: "待复核",
+  sample: "抽查",
+  full: "全量",
+  manager: "负责人范围",
+  region: "区域范围",
+  store_selection: "指定门店",
+  all_enabled_stores: "全部启用门店",
   manual: "手动触发",
   admin_manual: "后台手动",
   schedule: "定时任务",
   wecom: "企业微信",
+  inspection_admin_batch: "后台批量发起",
+  wecom_batch_owner: "企业微信负责人批量发起",
+  wecom_owner_batch: "企业微信负责人批量发起",
+  wecom_batch: "企业微信批量发起",
   inspection_admin: "巡检后台",
+  text: "正文指定负责人",
+  mention: "@指定负责人",
+  sender: "发送人本人",
+  owner_text: "正文指定负责人",
+  owner_mention: "@指定负责人",
+  owner_sender: "发送人本人",
+  manager_text: "正文指定负责人",
+  manager_mention: "@指定负责人",
+  manager_sender: "发送人本人",
+  explicit_text: "正文指定负责人",
+  mentioned_user: "@指定负责人",
+  message_sender: "发送人本人",
+  from_user: "发送人本人",
   scene_expectation: "场景预期",
   must_have: "必须出现",
   must_not_have: "禁止出现",
@@ -81,6 +115,22 @@ export function formatJobStatus(status: string) {
 
 export function formatTriggerType(triggerType: string) {
   return readMapValue(triggerType, triggerType || "未知来源");
+}
+
+export function formatTriggerSource(source?: string) {
+  return readMapValue(source || "", source || "未知来源");
+}
+
+export function formatBatchScopeType(scopeType: string) {
+  return readMapValue(scopeType, scopeType || "未设置");
+}
+
+export function formatExecutionMode(mode: string) {
+  return readMapValue(mode, mode || "未设置");
+}
+
+export function formatOwnerSource(source?: string) {
+  return readMapValue(source || "", source || "未记录");
 }
 
 export function formatMatchMode(mode: string) {
@@ -149,6 +199,91 @@ export function getPlanDisplayName(plan?: Pick<Plan, "name" | "id"> | null) {
     return "未绑定计划";
   }
   return String(plan.name || `计划-${plan.id || "未命名"}`).trim();
+}
+
+function readCandidateString(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = String(record[key] || "").trim();
+    if (value) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function asLooseBatch(batch?: Partial<BatchExecutionRun> | null) {
+  return ((batch || {}) as Record<string, unknown>);
+}
+
+function buildPersonDisplay(name: string, wecomUserId: string, emptyLabel: string) {
+  if (name && wecomUserId) {
+    return `${name} (${wecomUserId})`;
+  }
+  if (name) {
+    return name;
+  }
+  if (wecomUserId) {
+    return wecomUserId;
+  }
+  return emptyLabel;
+}
+
+export function resolveBatchInitiator(batch?: Partial<BatchExecutionRun> | null) {
+  const record = asLooseBatch(batch);
+  const name = readCandidateString(record, ["initiatorName", "operatorName", "senderName", "fromUserName"]);
+  const wecomUserId = readCandidateString(record, [
+    "initiatorWecomUserId",
+    "operatorWecomUserId",
+    "senderWecomUserId",
+    "fromUserId",
+  ]);
+  return {
+    name,
+    wecomUserId,
+    display: buildPersonDisplay(name, wecomUserId, "未记录发起人"),
+  };
+}
+
+export function resolveBatchOwner(batch?: Partial<BatchExecutionRun> | null) {
+  const record = asLooseBatch(batch);
+  const name = readCandidateString(record, ["ownerName", "managerName"]);
+  const wecomUserId = readCandidateString(record, ["ownerWecomUserId", "managerWecomUserId"]);
+  const fallbackDisplay = String(batch?.scopeValue || "").trim();
+  return {
+    name,
+    wecomUserId,
+    display: buildPersonDisplay(name, wecomUserId, fallbackDisplay || "未记录负责人"),
+  };
+}
+
+export function resolveBatchSourceMeta(batch?: Partial<BatchExecutionRun> | null) {
+  const record = asLooseBatch(batch);
+  const sourceValue = readCandidateString(record, ["sourceLabel", "batchSource", "triggerSource"]);
+  const ownerSourceValue = readCandidateString(record, ["ownerSource", "managerSource", "scopeSource"]);
+  return {
+    sourceValue,
+    ownerSourceValue,
+    sourceLabel: formatTriggerSource(sourceValue),
+    ownerSourceLabel: ownerSourceValue ? formatOwnerSource(ownerSourceValue) : "未记录负责人来源",
+  };
+}
+
+export function getBatchScopeSummary(batch?: Partial<BatchExecutionRun> | null) {
+  const scopeType = String(batch?.scopeType || "").trim();
+  const scopeValue = String(batch?.scopeValue || "").trim();
+  if (scopeType === "manager") {
+    return scopeValue ? `负责人名下门店：${scopeValue}` : "负责人名下门店";
+  }
+  if (scopeType === "region") {
+    return scopeValue ? `区域门店：${scopeValue}` : "区域门店";
+  }
+  if (scopeType === "store") {
+    return scopeValue ? `指定门店：${scopeValue}` : "指定门店";
+  }
+  if (scopeType === "all") {
+    return "全部启用门店";
+  }
+  return scopeValue || "未设置执行范围";
 }
 
 export interface TopologyModule {

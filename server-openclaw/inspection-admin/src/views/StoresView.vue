@@ -1,9 +1,28 @@
 <template>
   <div class="inspection-page">
+    <section class="page-intro-card">
+      <div class="page-intro-grid">
+        <div class="page-intro-main">
+          <span class="page-intro-eyebrow">门店底座</span>
+          <div class="page-intro-title">让门店命中、负责人归属、巡检执行先在后台对齐</div>
+          <div class="page-intro-desc">
+            业务在企业微信里说的是门店俗称，系统里存的是标准名称，所以这里的门店名称、别名、区域和负责人信息，决定了后续巡检能不能稳命中、快闭环。
+          </div>
+        </div>
+        <div class="page-intro-side">
+          <div class="page-intro-tips">
+            <span class="soft-tag is-primary">支持标准名 + 别名命中</span>
+            <span class="soft-tag">可绑定负责人企微账号</span>
+            <span class="soft-tag">后续可继续挂多个监控模块</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="metric-grid">
       <article class="metric-card">
         <div class="metric-label">门店总数</div>
-        <div class="metric-value">{{ stores.length }}</div>
+        <div class="metric-value">{{ pagination.total }}</div>
         <div class="metric-footnote">后台当前已创建门店</div>
       </article>
       <article class="metric-card">
@@ -38,27 +57,58 @@
         </div>
       </template>
 
-      <el-table :data="stores" v-loading="loading" border>
-        <el-table-column prop="name" label="门店名称" min-width="180" />
-        <el-table-column prop="code" label="门店编码" width="180" />
-        <el-table-column prop="aliasList" label="门店别名" min-width="220" show-overflow-tooltip />
-        <el-table-column prop="region" label="区域" width="140" />
-        <el-table-column label="状态" width="120">
-          <template #default="{ row }">
-            <span :class="['soft-tag', row.status === 'enabled' ? 'is-success' : 'is-warning']">
-              {{ formatStoreStatus(row.status) }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="managerName" label="负责人" width="140" />
-        <el-table-column prop="managerWecomUserId" label="负责人企微 ID" min-width="180" />
-        <el-table-column prop="remark" label="备注" min-width="220" />
-        <el-table-column label="操作" width="120" fixed="right">
-          <template #default="{ row }">
-            <el-button text @click="openEdit(row)">编辑</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+      <div class="panel-toolbar">
+        <div class="toolbar-stats">
+          <div class="toolbar-stat">
+            <div class="toolbar-stat-label">启用覆盖率</div>
+            <div class="toolbar-stat-value">{{ enabledCoverage }}</div>
+          </div>
+          <div class="toolbar-stat">
+            <div class="toolbar-stat-label">负责人配置率</div>
+            <div class="toolbar-stat-value">{{ managerCoverage }}</div>
+          </div>
+          <div class="toolbar-stat">
+            <div class="toolbar-stat-label">已配置别名门店</div>
+            <div class="toolbar-stat-value">{{ aliasConfiguredCount }}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-table-area">
+        <el-table :data="stores" v-loading="loading" border>
+          <el-table-column prop="name" label="门店名称" min-width="180" />
+          <el-table-column prop="code" label="门店编码" width="180" />
+          <el-table-column prop="aliasList" label="门店别名" min-width="220" show-overflow-tooltip />
+          <el-table-column prop="region" label="区域" width="140" />
+          <el-table-column label="状态" width="120">
+            <template #default="{ row }">
+              <span :class="['soft-tag', row.status === 'enabled' ? 'is-success' : 'is-warning']">
+                {{ formatStoreStatus(row.status) }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="managerName" label="负责人" width="140" />
+          <el-table-column prop="managerWecomUserId" label="负责人企微 ID" min-width="180" />
+          <el-table-column prop="remark" label="备注" min-width="220" />
+          <el-table-column label="操作" width="120" fixed="right">
+            <template #default="{ row }">
+              <el-button text @click="openEdit(row)">编辑</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <div class="table-pagination">
+        <el-pagination
+          v-model:current-page="pagination.page"
+          v-model:page-size="pagination.pageSize"
+          background
+          layout="total, sizes, prev, pager, next, jumper"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="pagination.total"
+          @change="loadData"
+        />
+      </div>
     </el-card>
 
     <el-dialog v-model="dialogVisible" :title="editingId ? '编辑门店' : '新建门店'" width="560px">
@@ -108,9 +158,21 @@ const submitting = ref(false);
 const dialogVisible = ref(false);
 const editingId = ref<number | null>(null);
 const stores = ref<StoreItem[]>([]);
+const pagination = reactive({
+  page: 1,
+  pageSize: 10,
+  total: 0,
+});
 
 const enabledCount = computed(() => stores.value.filter((item) => item.status === "enabled").length);
 const assignedManagerCount = computed(() => stores.value.filter((item) => item.managerWecomUserId).length);
+const aliasConfiguredCount = computed(() => stores.value.filter((item) => item.aliasList?.trim()).length);
+const enabledCoverage = computed(() =>
+  pagination.total ? `${Math.round((enabledCount.value / pagination.total) * 100)}%` : "0%",
+);
+const managerCoverage = computed(() =>
+  pagination.total ? `${Math.round((assignedManagerCount.value / pagination.total) * 100)}%` : "0%",
+);
 
 const emptyForm = () => ({
   name: "",
@@ -128,8 +190,12 @@ const form = reactive(emptyForm());
 async function loadData() {
   loading.value = true;
   try {
-    const response = await inspectionApi.getStores();
-    stores.value = response.data;
+    const response = await inspectionApi.getStores({
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+    });
+    stores.value = response.data.items;
+    pagination.total = response.data.total;
   } finally {
     loading.value = false;
   }

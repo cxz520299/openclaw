@@ -178,16 +178,16 @@ async function loadData() {
   try {
     const [summaryResp, jobsResp, storesResp, streamsResp, bindingsResp] = await Promise.all([
       inspectionApi.getSummary(),
-      inspectionApi.getJobs(),
-      inspectionApi.getStores(),
-      inspectionApi.getStreams(),
-      inspectionApi.getBindings(),
+      inspectionApi.getJobs({ page: 1, pageSize: 8 }),
+      inspectionApi.getStores({ all: true }),
+      inspectionApi.getStreams({ all: true }),
+      inspectionApi.getBindings({ all: true }),
     ]);
     summary.value = summaryResp.data;
-    jobs.value = jobsResp.data.slice(0, 8);
-    stores.value = storesResp.data;
-    streams.value = streamsResp.data;
-    bindings.value = bindingsResp.data;
+    jobs.value = jobsResp.data.items;
+    stores.value = storesResp.data.items;
+    streams.value = streamsResp.data.items;
+    bindings.value = bindingsResp.data.items;
   } finally {
     loading.value = false;
   }

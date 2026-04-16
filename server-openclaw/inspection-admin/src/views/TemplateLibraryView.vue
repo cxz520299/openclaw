@@ -1,6 +1,6 @@
 <template>
   <div class="page-grid">
-    <el-card shadow="never" class="full-span">
+    <el-card shadow="never" class="panel-card full-span">
       <el-alert
         title="已将实时检查模板沉淀为后台模板库，并为默认门店生成“成都小智零食有鸣-实时检查计划”"
         type="success"
@@ -9,11 +9,11 @@
       />
     </el-card>
 
-    <el-card shadow="never">
+    <el-card shadow="never" class="panel-card">
       <template #header>
         <div class="card-header">
           <span>点检分类</span>
-          <el-tag type="info">{{ categories.length }} 个分类</el-tag>
+          <el-tag type="info">{{ categoryPagination.total }} 个分类</el-tag>
         </div>
       </template>
 
@@ -28,9 +28,21 @@
             </template>
           </el-table-column>
         </el-table>
+
+        <div class="table-pagination">
+          <el-pagination
+            v-model:current-page="categoryPagination.page"
+            v-model:page-size="categoryPagination.pageSize"
+            background
+            layout="total, sizes, prev, pager, next"
+            :page-sizes="[10, 20, 50]"
+            :total="categoryPagination.total"
+            @change="loadCategories"
+          />
+        </div>
     </el-card>
 
-    <el-card shadow="never">
+    <el-card shadow="never" class="panel-card">
       <template #header>
         <div class="card-header">
           <div>
@@ -39,7 +51,7 @@
               {{ selectedCategory ? `${selectedCategory.name} · ${selectedCategory.description}` : "请选择左侧分类" }}
             </div>
           </div>
-          <el-tag v-if="selectedCategory" type="primary">{{ items.length }} 条</el-tag>
+          <el-tag v-if="selectedCategory" type="primary">{{ itemPagination.total }} 条</el-tag>
         </div>
       </template>
 
@@ -73,12 +85,24 @@
           </article>
         </template>
       </div>
+
+      <div v-if="selectedCategory" class="table-pagination">
+        <el-pagination
+          v-model:current-page="itemPagination.page"
+          v-model:page-size="itemPagination.pageSize"
+          background
+          layout="total, sizes, prev, pager, next"
+          :page-sizes="[10, 20, 50]"
+          :total="itemPagination.total"
+          @change="reloadCategoryItems"
+        />
+      </div>
     </el-card>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 import { inspectionApi } from "@/api/inspection";
 import { useAppStore } from "@/stores/app";
@@ -91,6 +115,16 @@ const loadingItems = ref(false);
 const categories = ref<TemplateCategory[]>([]);
 const items = ref<TemplateItem[]>([]);
 const selectedCategory = ref<TemplateCategory | null>(null);
+const categoryPagination = reactive({
+  page: 1,
+  pageSize: 10,
+  total: 0,
+});
+const itemPagination = reactive({
+  page: 1,
+  pageSize: 10,
+  total: 0,
+});
 
 function splitStandardText(standardText: string) {
   return standardText
@@ -102,9 +136,16 @@ function splitStandardText(standardText: string) {
 async function loadCategories() {
   loadingCategories.value = true;
   try {
-    const response = await inspectionApi.getTemplateCategories();
-    categories.value = response.data;
+    const response = await inspectionApi.getTemplateCategories({
+      page: categoryPagination.page,
+      pageSize: categoryPagination.pageSize,
+    });
+    categories.value = response.data.items;
+    categoryPagination.total = response.data.total;
     if (!selectedCategory.value && categories.value.length > 0) {
+      await selectCategory(categories.value[0]);
+    }
+    if (selectedCategory.value && !categories.value.some((item) => item.id === selectedCategory.value?.id) && categories.value.length > 0) {
       await selectCategory(categories.value[0]);
     }
   } catch (error) {
@@ -116,10 +157,25 @@ async function loadCategories() {
 
 async function selectCategory(category: TemplateCategory) {
   selectedCategory.value = category;
+  itemPagination.page = 1;
+  await reloadCategoryItems();
+}
+
+async function reloadCategoryItems() {
+  if (!selectedCategory.value) {
+    items.value = [];
+    itemPagination.total = 0;
+    return;
+  }
   loadingItems.value = true;
   try {
-    const response = await inspectionApi.getTemplateItems(category.id);
-    items.value = response.data;
+    const response = await inspectionApi.getTemplateItems({
+      categoryId: selectedCategory.value.id,
+      page: itemPagination.page,
+      pageSize: itemPagination.pageSize,
+    });
+    items.value = response.data.items;
+    itemPagination.total = response.data.total;
   } catch (error) {
     ElMessage.error(`模板明细加载失败：${String(error)}`);
   } finally {
@@ -136,8 +192,8 @@ onMounted(() => {
 <style scoped>
 .page-grid {
   display: grid;
-  gap: 16px;
-  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 18px;
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
 }
 
 .full-span {
@@ -147,9 +203,14 @@ onMounted(() => {
 .card-header,
 .item-top {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+}
+
+.card-header > *,
+.item-top > * {
+  min-width: 0;
 }
 
 .section-title {
@@ -182,6 +243,7 @@ onMounted(() => {
   font-size: 16px;
   font-weight: 700;
   color: #111827;
+  word-break: break-word;
 }
 
 .item-tags {
@@ -214,6 +276,14 @@ onMounted(() => {
 @media (max-width: 1200px) {
   .page-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .card-header,
+  .item-top {
+    flex-direction: column;
+    align-items: stretch;
   }
 }
 </style>

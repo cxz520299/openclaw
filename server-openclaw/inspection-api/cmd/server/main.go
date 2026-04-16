@@ -416,6 +416,7 @@ func main() {
 		api.POST("/manual-executions", app.createManualExecution)
 		api.POST("/batch-executions/estimate", app.estimateBatchExecution)
 		api.POST("/batch-executions", app.createBatchExecution)
+		api.GET("/batch-store-summary", app.getBatchStoreSummary)
 		api.POST("/inspection-results", app.createInspectionResult)
 	}
 
@@ -465,6 +466,23 @@ func mustOpenDatabase(cfg Config) *gorm.DB {
 		db, err := gorm.Open(sqlite.Open(cfg.DatabaseDSN), &gorm.Config{})
 		if err != nil {
 			panic(err)
+		}
+		sqlDB, err := db.DB()
+		if err != nil {
+			panic(err)
+		}
+		sqlDB.SetMaxOpenConns(8)
+		sqlDB.SetMaxIdleConns(4)
+		sqlDB.SetConnMaxLifetime(0)
+		for _, pragma := range []string{
+			"PRAGMA journal_mode=WAL;",
+			"PRAGMA busy_timeout=5000;",
+			"PRAGMA synchronous=NORMAL;",
+			"PRAGMA foreign_keys=ON;",
+		} {
+			if _, err := sqlDB.Exec(pragma); err != nil {
+				panic(err)
+			}
 		}
 		return db
 	}
@@ -1792,7 +1810,7 @@ func (app *App) createBatchExecution(ctx *gin.Context) {
 				StoreID: target.Store.ID,
 				PlanID:  target.Plan.ID,
 			}
-			app.writeMatchLog(contextReq, trace, &target.Store, &target.Plan, &target.Binding.Stream, &target.Binding, &job.ID)
+			app.writeMatchLogWithDB(tx, contextReq, trace, &target.Store, &target.Plan, &target.Binding.Stream, &target.Binding, &job.ID)
 		}
 		return nil
 	})
@@ -1833,6 +1851,38 @@ func (app *App) createBatchExecution(ctx *gin.Context) {
 		"batch":   batchRun,
 		"summary": app.buildBatchEstimatePayload(req, plan, stores, targets),
 		"jobs":    createdJobs,
+	})
+}
+
+func (app *App) getBatchStoreSummary(ctx *gin.Context) {
+	req := batchExecutionRequest{
+		Region:           strings.TrimSpace(ctx.Query("region")),
+		ManagerName:      strings.TrimSpace(ctx.Query("managerName")),
+		ManagerWecomUserID: strings.TrimSpace(ctx.Query("managerWecomUserId")),
+		OwnerName:        strings.TrimSpace(ctx.Query("ownerName")),
+		OwnerWecomUserID: strings.TrimSpace(ctx.Query("ownerWecomUserId")),
+		OwnerSource:      strings.TrimSpace(ctx.Query("ownerSource")),
+	}
+
+	stores, err := app.listBatchStores(req)
+	if err != nil {
+		fail(ctx, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	ownerName, ownerWecomUserID, ownerSource := resolveBatchOwner(req)
+	summaryText := "当前未查询到负责人名下的启用门店。"
+	if len(stores) > 0 {
+		summaryText = fmt.Sprintf("当前共查询到 %d 家启用门店。", len(stores))
+	}
+
+	success(ctx, gin.H{
+		"ownerName":        ownerName,
+		"ownerWecomUserId": ownerWecomUserID,
+		"ownerSource":      ownerSource,
+		"storeCount":       len(stores),
+		"stores":           stores,
+		"summaryText":      summaryText,
 	})
 }
 
@@ -3469,7 +3519,7 @@ func (app *App) currentConfigVersion() string {
 	return latest.UTC().Format(time.RFC3339)
 }
 
-func (app *App) writeMatchLog(req executeContextRequest, trace resolveTrace, store *Store, plan *InspectionPlan, stream *StoreStream, binding *StorePlanBinding, jobID *uint) {
+func (app *App) writeMatchLogWithDB(db *gorm.DB, req executeContextRequest, trace resolveTrace, store *Store, plan *InspectionPlan, stream *StoreStream, binding *StorePlanBinding, jobID *uint) {
 	logItem := InspectionMatchLog{
 		QueryText:          strings.TrimSpace(trace.QueryText),
 		NormalizedQuery:    normalizeLookupToken(trace.QueryText),
@@ -3504,7 +3554,14 @@ func (app *App) writeMatchLog(req executeContextRequest, trace resolveTrace, sto
 	if binding != nil {
 		logItem.MatchedBindingID = binding.ID
 	}
-	_ = app.db.Create(&logItem).Error
+	if db == nil {
+		db = app.db
+	}
+	_ = db.Create(&logItem).Error
+}
+
+func (app *App) writeMatchLog(req executeContextRequest, trace resolveTrace, store *Store, plan *InspectionPlan, stream *StoreStream, binding *StorePlanBinding, jobID *uint) {
+	app.writeMatchLogWithDB(app.db, req, trace, store, plan, stream, binding, jobID)
 }
 
 func statusFromVerdict(verdict string) string {
