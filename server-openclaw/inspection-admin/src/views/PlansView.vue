@@ -9,7 +9,7 @@
       class="plan-alert"
     />
 
-    <el-card shadow="never">
+    <el-card shadow="never" class="panel-card">
       <template #header>
         <div class="card-header">
           <span>巡检计划</span>
@@ -42,9 +42,21 @@
           </template>
         </el-table-column>
       </el-table>
+
+      <div class="table-pagination">
+        <el-pagination
+          v-model:current-page="planPagination.page"
+          v-model:page-size="planPagination.pageSize"
+          background
+          layout="total, sizes, prev, pager, next, jumper"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="planPagination.total"
+          @change="loadPlans"
+        />
+      </div>
     </el-card>
 
-    <el-card shadow="never">
+    <el-card shadow="never" class="panel-card">
       <template #header>
         <div class="card-header">
           <span>点检项{{ selectedPlan ? ` · ${selectedPlan.name}` : "" }}</span>
@@ -74,6 +86,18 @@
           </template>
         </el-table-column>
       </el-table>
+
+      <div class="table-pagination">
+        <el-pagination
+          v-model:current-page="itemPagination.page"
+          v-model:page-size="itemPagination.pageSize"
+          background
+          layout="total, sizes, prev, pager, next, jumper"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="itemPagination.total"
+          @change="reloadSelectedPlanItems"
+        />
+      </div>
     </el-card>
 
     <el-dialog v-model="planDialogVisible" :title="editingPlanId ? '编辑计划' : '新建计划'" width="620px">
@@ -158,6 +182,16 @@ const submittingItem = ref(false);
 const plans = ref<Plan[]>([]);
 const planItems = ref<PlanItem[]>([]);
 const selectedPlan = ref<Plan | null>(null);
+const planPagination = reactive({
+  page: 1,
+  pageSize: 10,
+  total: 0,
+});
+const itemPagination = reactive({
+  page: 1,
+  pageSize: 10,
+  total: 0,
+});
 
 const planDialogVisible = ref(false);
 const itemDialogVisible = ref(false);
@@ -190,9 +224,16 @@ const itemForm = reactive(emptyItemForm());
 async function loadPlans() {
   loadingPlans.value = true;
   try {
-    const response = await inspectionApi.getPlans();
-    plans.value = response.data;
+    const response = await inspectionApi.getPlans({
+      page: planPagination.page,
+      pageSize: planPagination.pageSize,
+    });
+    plans.value = response.data.items;
+    planPagination.total = response.data.total;
     if (!selectedPlan.value && plans.value.length > 0) {
+      await selectPlan(plans.value[0]);
+    }
+    if (selectedPlan.value && !plans.value.some((item) => item.id === selectedPlan.value?.id) && plans.value.length > 0) {
       await selectPlan(plans.value[0]);
     }
   } finally {
@@ -202,10 +243,24 @@ async function loadPlans() {
 
 async function selectPlan(plan: Plan) {
   selectedPlan.value = plan;
+  itemPagination.page = 1;
+  await reloadSelectedPlanItems();
+}
+
+async function reloadSelectedPlanItems() {
+  if (!selectedPlan.value) {
+    planItems.value = [];
+    itemPagination.total = 0;
+    return;
+  }
   loadingItems.value = true;
   try {
-    const response = await inspectionApi.getPlanItems(plan.id);
-    planItems.value = response.data;
+    const response = await inspectionApi.getPlanItems(selectedPlan.value.id, {
+      page: itemPagination.page,
+      pageSize: itemPagination.pageSize,
+    });
+    planItems.value = response.data.items;
+    itemPagination.total = response.data.total;
   } finally {
     loadingItems.value = false;
   }
@@ -266,7 +321,7 @@ async function submitItem() {
       ElMessage.success("点检项已创建");
     }
     itemDialogVisible.value = false;
-    await selectPlan(selectedPlan.value);
+    await reloadSelectedPlanItems();
   } finally {
     submittingItem.value = false;
   }
@@ -281,8 +336,8 @@ onMounted(() => {
 <style scoped>
 .page-grid {
   display: grid;
-  gap: 16px;
-  grid-template-columns: 1.2fr 1fr;
+  gap: 18px;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
 }
 
 .plan-alert {
@@ -291,13 +346,31 @@ onMounted(() => {
 
 .card-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
+  gap: 16px;
+}
+
+.card-header > * {
+  min-width: 0;
+}
+
+@media (max-width: 1440px) {
+  .page-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 @media (max-width: 1200px) {
   .page-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .card-header {
+    flex-direction: column;
+    align-items: stretch;
   }
 }
 </style>

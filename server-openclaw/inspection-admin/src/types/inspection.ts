@@ -4,6 +4,13 @@ export interface ApiResponse<T> {
   data: T;
 }
 
+export interface PaginatedData<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
 export interface StoreItem {
   id: number;
   name: string;
@@ -126,10 +133,14 @@ export interface MatchLogItem {
 export interface JobItem {
   id: number;
   jobNo: string;
+  batchId?: number | null;
   status: string;
   triggerType: string;
   triggerSource: string;
   operatorName: string;
+  errorMessage?: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
   createdAt: string;
   store?: StoreItem;
   plan?: Plan;
@@ -195,4 +206,68 @@ export interface Summary {
   bindings: number;
   jobs: number;
   results: number;
+}
+
+export interface BatchExecutionEstimate {
+  planId: number;
+  planName: string;
+  executionMode: string;
+  sampleSize: number;
+  storeCount: number;
+  selectedStoreCount: number;
+  skippedStoreCount: number;
+  jobCount: number;
+  monitorCount: number;
+  planItemCount: number;
+  estimatedSeconds: number;
+  estimatedLabel: string;
+  summaryText: string;
+  stores: StoreItem[];
+  skippedStores: StoreItem[];
+}
+
+export interface BatchExecutionCreateResult {
+  batch: BatchExecutionRun;
+  summary: BatchExecutionEstimate;
+  jobs: JobItem[];
+}
+
+export interface BatchExecutionRun {
+  id: number;
+  batchNo: string;
+  scopeType: string;
+  scopeValue?: string;
+  operatorName?: string;
+  operatorWecomUserId?: string;
+  triggerSource?: string;
+  sourceLabel?: string;
+  initiatorName?: string;
+  initiatorWecomUserId?: string;
+  ownerName?: string;
+  ownerWecomUserId?: string;
+  ownerSource?: string;
+  managerName?: string;
+  managerWecomUserId?: string;
+  managerSource?: string;
+  conversationId?: string;
+  planId: number;
+  plan?: Plan;
+  planName?: string;
+  executionMode: string;
+  sampleSize?: number;
+  selectedStoreCount: number;
+  matchedStoreCount: number;
+  totalJobs: number;
+  pendingJobs: number;
+  runningJobs: number;
+  successJobs: number;
+  alertedJobs: number;
+  partialSuccessJobs: number;
+  errorJobs: number;
+  status: string;
+  summaryText?: string;
+  finishedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  jobs?: JobItem[];
 }

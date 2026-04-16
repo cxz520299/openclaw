@@ -37,6 +37,11 @@ const routes = [
     component: () => import("@/views/JobsView.vue"),
   },
   {
+    path: "/batch-center",
+    name: "batch-center",
+    component: () => import("@/views/BatchCenterView.vue"),
+  },
+  {
     path: "/match-logs",
     name: "match-logs",
     component: () => import("@/views/MatchLogsView.vue"),

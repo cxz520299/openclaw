@@ -1,5 +1,42 @@
 <template>
   <div class="inspection-page">
+    <section class="page-intro-card">
+      <div class="page-intro-grid">
+        <div class="page-intro-main">
+          <span class="page-intro-eyebrow">监控编排</span>
+          <div class="page-intro-title">一个门店对应多个监控模块，巡检时要能说清楚命中了哪个点位</div>
+          <div class="page-intro-desc">
+            这里维护的是门头、收银台、仓库等具体监控模块。名称越贴近业务叫法，后续在企业微信里执行巡检计划时，命中越稳、结果越容易被业务看懂。
+          </div>
+        </div>
+        <div class="page-intro-side">
+          <div class="page-intro-tips">
+            <span class="soft-tag is-primary">一店多监控模块</span>
+            <span class="soft-tag">支持点位别名和流地址别名</span>
+            <span class="soft-tag">可绑定点检项或基准图计划</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="metric-grid">
+      <article class="metric-card">
+        <div class="metric-label">监控模块总数</div>
+        <div class="metric-value">{{ streams.length }}</div>
+        <div class="metric-footnote">按门店聚合前的全部监控模块</div>
+      </article>
+      <article class="metric-card">
+        <div class="metric-label">启用模块</div>
+        <div class="metric-value">{{ enabledModuleCount }}</div>
+        <div class="metric-footnote">当前可参与巡检执行的监控模块</div>
+      </article>
+      <article class="metric-card">
+        <div class="metric-label">已绑定计划模块</div>
+        <div class="metric-value">{{ boundModuleCount }}</div>
+        <div class="metric-footnote">说明命中后可以直接执行巡检</div>
+      </article>
+    </section>
+
     <el-alert
       type="info"
       show-icon
@@ -109,28 +146,59 @@
         </div>
       </template>
 
-      <el-table :data="streams" v-loading="loading" border>
-        <el-table-column label="门店" min-width="160">
-          <template #default="{ row }">{{ row.store?.name || "-" }}</template>
-        </el-table-column>
-        <el-table-column prop="name" label="监控模块名称" min-width="180" />
-        <el-table-column prop="aliasList" label="点位别名" min-width="220" show-overflow-tooltip />
-        <el-table-column prop="streamUrl" label="流地址" min-width="320" />
-        <el-table-column prop="sourceAlias" label="流地址别名" min-width="220" />
-        <el-table-column prop="baselineImagePath" label="基准图路径" min-width="220" />
-        <el-table-column label="状态" width="100">
-          <template #default="{ row }">
-            <span :class="['soft-tag', row.enabled ? 'is-success' : 'is-warning']">
-              {{ formatBooleanStatus(row.enabled) }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right">
-          <template #default="{ row }">
-            <el-button text @click="openEdit(row)">编辑</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+      <div class="panel-toolbar">
+        <div class="toolbar-stats">
+          <div class="toolbar-stat">
+            <div class="toolbar-stat-label">门店覆盖数</div>
+            <div class="toolbar-stat-value">{{ topology.length }}</div>
+          </div>
+          <div class="toolbar-stat">
+            <div class="toolbar-stat-label">基准图已配置</div>
+            <div class="toolbar-stat-value">{{ baselineConfiguredCount }}</div>
+          </div>
+          <div class="toolbar-stat">
+            <div class="toolbar-stat-label">当前分页条数</div>
+            <div class="toolbar-stat-value">{{ tableStreams.length }}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-table-area">
+        <el-table :data="tableStreams" v-loading="loading" border>
+          <el-table-column label="门店" min-width="160">
+            <template #default="{ row }">{{ row.store?.name || "-" }}</template>
+          </el-table-column>
+          <el-table-column prop="name" label="监控模块名称" min-width="180" />
+          <el-table-column prop="aliasList" label="点位别名" min-width="220" show-overflow-tooltip />
+          <el-table-column prop="streamUrl" label="流地址" min-width="320" />
+          <el-table-column prop="sourceAlias" label="流地址别名" min-width="220" />
+          <el-table-column prop="baselineImagePath" label="基准图路径" min-width="220" />
+          <el-table-column label="状态" width="100">
+            <template #default="{ row }">
+              <span :class="['soft-tag', row.enabled ? 'is-success' : 'is-warning']">
+                {{ formatBooleanStatus(row.enabled) }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="120" fixed="right">
+            <template #default="{ row }">
+              <el-button text @click="openEdit(row)">编辑</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <div class="table-pagination">
+        <el-pagination
+          v-model:current-page="pagination.page"
+          v-model:page-size="pagination.pageSize"
+          background
+          layout="total, sizes, prev, pager, next, jumper"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="pagination.total"
+          @change="loadData"
+        />
+      </div>
     </el-card>
 
     <el-dialog v-model="dialogVisible" :title="editingId ? '编辑监控模块' : '新增监控模块'" width="720px">
@@ -186,11 +254,20 @@ const submitting = ref(false);
 const dialogVisible = ref(false);
 const editingId = ref<number | null>(null);
 const streams = ref<StreamItem[]>([]);
+const tableStreams = ref<StreamItem[]>([]);
 const stores = ref<StoreItem[]>([]);
 const bindings = ref<BindingItem[]>([]);
+const pagination = reactive({
+  page: 1,
+  pageSize: 10,
+  total: 0,
+});
 
 const topology = computed(() => buildStoreTopology(stores.value, streams.value, bindings.value));
 const streamMap = computed(() => new Map(streams.value.map((item) => [item.id, item])));
+const enabledModuleCount = computed(() => streams.value.filter((item) => item.enabled).length);
+const boundModuleCount = computed(() => topology.value.reduce((sum, store) => sum + store.modules.filter((item) => item.bindings.length).length, 0));
+const baselineConfiguredCount = computed(() => streams.value.filter((item) => item.baselineImagePath || item.baselineImageUrl).length);
 
 const emptyForm = () => ({
   storeId: undefined as number | undefined,
@@ -209,14 +286,20 @@ const form = reactive(emptyForm());
 async function loadData() {
   loading.value = true;
   try {
-    const [storeResp, streamResp, bindingResp] = await Promise.all([
-      inspectionApi.getStores(),
-      inspectionApi.getStreams(),
-      inspectionApi.getBindings(),
+    const [storeResp, streamResp, bindingResp, streamTableResp] = await Promise.all([
+      inspectionApi.getStores({ all: true }),
+      inspectionApi.getStreams({ all: true }),
+      inspectionApi.getBindings({ all: true }),
+      inspectionApi.getStreams({
+        page: pagination.page,
+        pageSize: pagination.pageSize,
+      }),
     ]);
-    stores.value = storeResp.data;
-    streams.value = streamResp.data;
-    bindings.value = bindingResp.data;
+    stores.value = storeResp.data.items;
+    streams.value = streamResp.data.items;
+    bindings.value = bindingResp.data.items;
+    pagination.total = streamTableResp.data.total;
+    tableStreams.value = streamTableResp.data.items;
   } finally {
     loading.value = false;
   }
